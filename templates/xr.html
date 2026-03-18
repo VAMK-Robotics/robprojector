@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RobProjector XR</title>
+
+  <!-- Three.js served locally so the Quest (no internet) can load it -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/static/three/three.module.min.js"
+    }
+  }
+  </script>
+
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #0d1117; font-family: 'Segoe UI', Arial, sans-serif; color: #e6edf3; }
+
+    #xr-canvas { position: fixed; top: 0; left: 0; display: block; }
+
+    /* ── Pre-VR overlay ─────────────────────────────────────────── */
+    #overlay {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 20px; padding: 24px;
+      background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+      pointer-events: none;
+      transition: opacity 0.4s;
+    }
+    #overlay.hidden { opacity: 0; pointer-events: none; }
+    #overlay > * { pointer-events: auto; }
+
+    .panel {
+      background: rgba(22,27,34,0.92);
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 20px 28px;
+      max-width: 480px; width: 100%;
+    }
+
+    h1 { font-size: 1.8rem; font-weight: 700; color: #58a6ff; letter-spacing: 0.02em; }
+    h1 span { color: #3fb950; }
+
+    .subtitle { font-size: 0.9rem; color: #8b949e; margin-top: 4px; }
+
+    .status-row { display: flex; align-items: center; gap: 10px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #6e7681; flex-shrink: 0; }
+    .dot.ok      { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
+    .dot.error   { background: #f85149; box-shadow: 0 0 6px #f85149; }
+    .dot.pending { background: #d29922; box-shadow: 0 0 6px #d29922; animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    #status-text  { font-size: 0.9rem; }
+    #target-count { font-size: 2rem; font-weight: 700; color: #58a6ff; }
+    .count-label  { font-size: 0.8rem; color: #8b949e; }
+
+    .addr-box {
+      background: #010409;
+      border: 1px solid #21262d;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      color: #79c0ff;
+      word-break: break-all;
+    }
+    .addr-label { font-size: 0.75rem; color: #8b949e; margin-bottom: 4px; }
+
+    .instructions { font-size: 0.85rem; color: #8b949e; line-height: 1.6; }
+    .instructions li { margin-left: 16px; }
+
+    #vr-button {
+      margin-top: 4px;
+      padding: 14px 40px;
+      font-size: 1.1rem; font-weight: 700;
+      color: #fff;
+      background: linear-gradient(135deg, #238636, #2ea043);
+      border: none; border-radius: 8px;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s;
+      box-shadow: 0 4px 16px rgba(46,160,67,0.4);
+    }
+    #vr-button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(46,160,67,0.5); }
+    #vr-button:disabled { background: #21262d; color: #6e7681; cursor: not-allowed; box-shadow: none; }
+    #vr-button.exit { background: linear-gradient(135deg, #8b1a1a, #c0392b); box-shadow: 0 4px 16px rgba(192,57,43,0.4); }
+
+    #webxr-warning {
+      display: none;
+      background: rgba(248, 81, 73, 0.1);
+      border: 1px solid #f85149;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 0.85rem;
+      color: #ffa198;
+    }
+    #webxr-warning.visible { display: block; }
+  </style>
+</head>
+<body>
+
+<canvas id="xr-canvas"></canvas>
+
+<!-- ─── Pre-VR overlay ──────────────────────────────────────────────────── -->
+<div id="overlay">
+
+  <div class="panel">
+    <h1>Rob<span>Projector</span> <span style="color:#58a6ff">XR</span></h1>
+    <p class="subtitle">3D robtarget visualiser for Meta Quest 3</p>
+  </div>
+
+  <div class="panel" style="display:flex; gap:32px; align-items:center;">
+    <div>
+      <div id="target-count">0</div>
+      <div class="count-label">robtargets</div>
+    </div>
+    <div style="flex:1">
+      <div class="status-row">
+        <div class="dot pending" id="status-dot"></div>
+        <span id="status-text">Connecting to server…</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="addr-label">Open this address on Meta Quest 3 browser:</div>
+    <div class="addr-box" id="xr-address">
+      https://{{ server_ip }}:{{ https_port }}/xr
+    </div>
+  </div>
+
+  <div class="panel">
+    <ul class="instructions">
+      <li><strong>Trigger</strong> — hold to <em>move</em> the coordinate system (translation only)</li>
+      <li><strong>Grip</strong> — hold to <em>rotate</em> the coordinate system around its origin (rotation only)</li>
+      <li>Both buttons can be held at the same time, on the same or different controllers</li>
+      <li>Robtargets move with the coordinate&nbsp;system — they cannot be controlled individually</li>
+    </ul>
+  </div>
+
+  <div id="webxr-warning">
+    WebXR is not available in this browser.<br>
+    Open the page on a Meta Quest 3 browser via the address shown above.
+  </div>
+
+  <button id="vr-button" disabled>Checking VR support…</button>
+
+</div>
+
+<!-- ─── Three.js WebXR application ─────────────────────────────────────── -->
+<script type="module">
+'use strict';
+import * as THREE from 'three';
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Scene / renderer setup
+═══════════════════════════════════════════════════════════════════════════ */
+
+const canvas   = document.getElementById('xr-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor');
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1117);
+scene.fog = new THREE.Fog(0x0d1117, 8, 20);
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 50);
+camera.position.set(0, 1.6, 2.5);
+
+/* Lights */
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+dirLight.position.set(3, 8, 5);
+scene.add(dirLight);
+
+/* Floor grid */
+const grid = new THREE.GridHelper(16, 32, 0x1f2937, 0x1a2030);
+scene.add(grid);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Robot coordinate-system group  (the moveable "wobj frame")
+
+   robotRootGroup lives in VR world space.
+   Its rotation.x = -π/2 maps ABB Z-up to VR Y-up:
+     ABB X → VR X  (right)
+     ABB Y → VR -Z (into screen / forward in robot space)
+     ABB Z → VR Y  (up)
+   Children use ABB (x,y,z) in mm scaled to metres.
+═══════════════════════════════════════════════════════════════════════════ */
+
+const robotRootGroup = new THREE.Group();
+robotRootGroup.position.set(0, 0.9, -1.2);
+robotRootGroup.rotation.x = -Math.PI / 2;
+scene.add(robotRootGroup);
+
+/* Origin sphere */
+const originGeo = new THREE.SphereGeometry(0.018, 16, 16);
+const originMat = new THREE.MeshPhongMaterial({ color: 0xffffff, emissive: 0x555555 });
+const originMesh = new THREE.Mesh(originGeo, originMat);
+robotRootGroup.add(originMesh);
+
+/* Coordinate-system axes at origin  (120 mm long) */
+const ORIGIN_AXIS_LEN = 0.12;
+robotRootGroup.add(makeArrow(new THREE.Vector3(1, 0, 0), 0xe74c3c, ORIGIN_AXIS_LEN));
+robotRootGroup.add(makeArrow(new THREE.Vector3(0, 1, 0), 0x2ecc71, ORIGIN_AXIS_LEN));
+robotRootGroup.add(makeArrow(new THREE.Vector3(0, 0, 1), 0x3498db, ORIGIN_AXIS_LEN));
+
+/* Axis letter labels at arrow tips */
+robotRootGroup.add(makeAxisLabel('X', new THREE.Vector3(ORIGIN_AXIS_LEN + 0.02, 0,               0),               '#e74c3c'));
+robotRootGroup.add(makeAxisLabel('Y', new THREE.Vector3(0,               ORIGIN_AXIS_LEN + 0.02, 0),               '#2ecc71'));
+robotRootGroup.add(makeAxisLabel('Z', new THREE.Vector3(0,               0,               ORIGIN_AXIS_LEN + 0.02), '#3498db'));
+
+/* Wobj name label (updated from SSE) */
+let wobjLabelSprite = null;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Controller setup
+═══════════════════════════════════════════════════════════════════════════ */
+
+const controller0 = renderer.xr.getController(0);
+const controller1 = renderer.xr.getController(1);
+scene.add(controller0);
+scene.add(controller1);
+
+addControllerVisual(controller0);
+addControllerVisual(controller1);
+
+/* ─── Trigger = translate ────────────────────────────────────────────────── */
+let triggerCtrl         = null;
+const triggerInitCtrlPos  = new THREE.Vector3();
+const triggerInitGroupPos = new THREE.Vector3();
+
+function onSelectStart(evt) {
+  if (triggerCtrl) return;
+  triggerCtrl = evt.target;
+  triggerCtrl.getWorldPosition(triggerInitCtrlPos);
+  triggerInitGroupPos.copy(robotRootGroup.position);
+  updateHighlight();
+}
+function onSelectEnd(evt) {
+  if (triggerCtrl !== evt.target) return;
+  triggerCtrl = null;
+  updateHighlight();
+}
+
+/* ─── Grip = rotate (around coordinate-system origin) ───────────────────── */
+let gripCtrl            = null;
+const gripInitCtrlQuat  = new THREE.Quaternion();
+const gripInitGroupQuat = new THREE.Quaternion();
+
+function onSqueezeStart(evt) {
+  if (gripCtrl) return;
+  gripCtrl = evt.target;
+  gripCtrl.getWorldQuaternion(gripInitCtrlQuat);
+  gripInitGroupQuat.copy(robotRootGroup.quaternion);
+  updateHighlight();
+}
+function onSqueezeEnd(evt) {
+  if (gripCtrl !== evt.target) return;
+  gripCtrl = null;
+  updateHighlight();
+}
+
+controller0.addEventListener('selectstart',  onSelectStart);
+controller0.addEventListener('selectend',    onSelectEnd);
+controller0.addEventListener('squeezestart', onSqueezeStart);
+controller0.addEventListener('squeezeend',   onSqueezeEnd);
+controller1.addEventListener('selectstart',  onSelectStart);
+controller1.addEventListener('selectend',    onSelectEnd);
+controller1.addEventListener('squeezestart', onSqueezeStart);
+controller1.addEventListener('squeezeend',   onSqueezeEnd);
+
+/* Origin sphere colour reflects active interaction */
+function updateHighlight() {
+  if (triggerCtrl && gripCtrl) {
+    originMat.color.set(0xff8800); originMat.emissive.set(0x442200); // orange  = both
+  } else if (triggerCtrl) {
+    originMat.color.set(0xffd700); originMat.emissive.set(0x443300); // yellow  = translate
+  } else if (gripCtrl) {
+    originMat.color.set(0x00ccff); originMat.emissive.set(0x003344); // cyan    = rotate
+  } else {
+    originMat.color.set(0xffffff); originMat.emissive.set(0x555555); // white   = idle
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Robtarget objects  (keyed by variable name)
+═══════════════════════════════════════════════════════════════════════════ */
+
+const robtargetObjects = new Map();   // name → THREE.Group
+const SCALE = 0.001;                  // mm → m
+const TARGET_AXIS_LEN = 0.06;        // 60 mm axis arrows
+
+function parseRobtarget(val) {
+  try {
+    const d = JSON.parse(val);
+    return {
+      x: d[0][0], y: d[0][1], z: d[0][2],
+      qw: d[1][0], qx: d[1][1], qy: d[1][2], qz: d[1][3],
+    };
+  } catch (_) { return null; }
+}
+
+function createRobtargetGroup(name) {
+  const g = new THREE.Group();
+
+  /* Position dot */
+  const dotGeo = new THREE.SphereGeometry(0.012, 16, 16);
+  const dotMat = new THREE.MeshPhongMaterial({ color: 0xff5500, emissive: 0x3a1200 });
+  g.add(new THREE.Mesh(dotGeo, dotMat));
+
+  /* Tool-orientation axis arrows — directions set on first update */
+  g.userData.xArrow = makeArrow(new THREE.Vector3(1, 0, 0), 0xe74c3c, TARGET_AXIS_LEN, true);
+  g.userData.yArrow = makeArrow(new THREE.Vector3(0, 1, 0), 0x2ecc71, TARGET_AXIS_LEN, true);
+  g.userData.zArrow = makeArrow(new THREE.Vector3(0, 0, 1), 0x3498db, TARGET_AXIS_LEN, true);
+  g.add(g.userData.xArrow, g.userData.yArrow, g.userData.zArrow);
+
+  /* Name label – offset along local +Z so it appears "above" in VR world space */
+  const label = makeTextSprite(name, '#ffcc44', 0.14, 0.028);
+  label.position.set(0, 0, 0.032);
+  g.add(label);
+  g.userData.label = label;
+
+  return g;
+}
+
+function updateRobtargetGroup(group, p) {
+  group.position.set(p.x * SCALE, p.y * SCALE, p.z * SCALE);
+
+  const q = new THREE.Quaternion(p.qx, p.qy, p.qz, p.qw).normalize();
+  const xDir = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+  const yDir = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+  const zDir = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+  group.userData.xArrow.setDirection(xDir);
+  group.userData.yArrow.setDirection(yDir);
+  group.userData.zArrow.setDirection(zDir);
+}
+
+function syncRobtargets(list) {
+  const incoming = new Set(list.map(r => r.name));
+
+  /* Remove targets that have disappeared */
+  for (const [name, g] of robtargetObjects) {
+    if (!incoming.has(name)) {
+      robotRootGroup.remove(g);
+      disposeGroup(g);
+      robtargetObjects.delete(name);
+    }
+  }
+
+  /* Add / update */
+  for (const rt of list) {
+    const p = parseRobtarget(rt.value);
+    if (!p) continue;
+    let g = robtargetObjects.get(rt.name);
+    if (!g) {
+      g = createRobtargetGroup(rt.name);
+      robotRootGroup.add(g);
+      robtargetObjects.set(rt.name, g);
+    }
+    updateRobtargetGroup(g, p);
+  }
+
+  document.getElementById('target-count').textContent = list.length;
+}
+
+function syncWobjdata(list) {
+  if (wobjLabelSprite) {
+    robotRootGroup.remove(wobjLabelSprite);
+    wobjLabelSprite.material.map?.dispose();
+    wobjLabelSprite.material.dispose();
+    wobjLabelSprite = null;
+  }
+  if (list.length > 0) {
+    wobjLabelSprite = makeTextSprite(list[0].name, '#aaddff', 0.18, 0.032);
+    wobjLabelSprite.position.set(0.07, 0, 0.07);
+    robotRootGroup.add(wobjLabelSprite);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Server-Sent Events
+═══════════════════════════════════════════════════════════════════════════ */
+
+function connectSSE() {
+  setStatus('Connecting…', 'pending');
+  const src = new EventSource('/events');
+  src.onopen    = ()  => setStatus('Connected', 'ok');
+  src.onerror   = ()  => setStatus('Disconnected', 'error');
+  src.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    syncRobtargets(data.robtargets ?? []);
+    syncWobjdata(data.wobjdata ?? []);
+  };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VR button  (inline – no VRButton addon required)
+═══════════════════════════════════════════════════════════════════════════ */
+
+const vrButton  = document.getElementById('vr-button');
+const overlay   = document.getElementById('overlay');
+const xrWarning = document.getElementById('webxr-warning');
+
+function setupVRButton() {
+  if (!navigator.xr) {
+    xrWarning.classList.add('visible');
+    vrButton.disabled = true;
+    vrButton.textContent = 'WebXR not available';
+    return;
+  }
+
+  navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+    if (!supported) {
+      xrWarning.classList.add('visible');
+      vrButton.disabled = true;
+      vrButton.textContent = 'VR not supported on this device';
+      return;
+    }
+
+    vrButton.disabled = false;
+    vrButton.textContent = 'ENTER VR';
+
+    vrButton.addEventListener('click', async () => {
+      if (renderer.xr.isPresenting) {
+        renderer.xr.getSession()?.end();
+        return;
+      }
+      try {
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          optionalFeatures: ['local-floor', 'bounded-floor'],
+        });
+        await renderer.xr.setSession(session);
+        overlay.classList.add('hidden');
+        vrButton.textContent = 'EXIT VR';
+        vrButton.classList.add('exit');
+        session.addEventListener('end', () => {
+          overlay.classList.remove('hidden');
+          vrButton.textContent = 'ENTER VR';
+          vrButton.classList.remove('exit');
+        });
+      } catch (err) {
+        console.error('XR session error:', err);
+      }
+    });
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Render loop
+═══════════════════════════════════════════════════════════════════════════ */
+
+const _tmpPos  = new THREE.Vector3();
+const _tmpQuat = new THREE.Quaternion();
+
+renderer.setAnimationLoop(() => {
+  // Trigger → translate (position only, quaternion untouched)
+  if (triggerCtrl) {
+    triggerCtrl.getWorldPosition(_tmpPos);
+    robotRootGroup.position.copy(triggerInitGroupPos).add(
+      _tmpPos.sub(triggerInitCtrlPos),
+    );
+  }
+
+  // Grip → rotate around coordinate-system origin (quaternion only, position untouched)
+  if (gripCtrl) {
+    gripCtrl.getWorldQuaternion(_tmpQuat);
+    // deltaQuat = currentCtrlQuat * inverse(initialCtrlQuat)
+    robotRootGroup.quaternion.copy(
+      _tmpQuat.multiply(gripInitCtrlQuat.clone().invert()).multiply(gripInitGroupQuat),
+    );
+  }
+
+  renderer.render(scene, camera);
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Resize
+═══════════════════════════════════════════════════════════════════════════ */
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Utility functions
+═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Create a THREE.ArrowHelper pointing in `dir` (local space).
+ * `small` = true uses narrower head ratios suitable for target axes.
+ */
+function makeArrow(dir, color, length, small = false) {
+  const headLen   = small ? length * 0.28 : length * 0.25;
+  const headWidth = small ? length * 0.18 : length * 0.15;
+  return new THREE.ArrowHelper(dir.clone().normalize(), new THREE.Vector3(0, 0, 0), length, color, headLen, headWidth);
+}
+
+/**
+ * Create a floating axis-label sprite (single letter, coloured).
+ */
+function makeAxisLabel(letter, pos, color) {
+  const sprite = makeTextSprite(letter, color, 0.06, 0.06, true);
+  sprite.position.copy(pos);
+  return sprite;
+}
+
+/**
+ * Create a canvas-texture sprite used for text labels.
+ * w / h are the world-space scale of the sprite.
+ * `square` = true makes the canvas square (for single letters).
+ */
+function makeTextSprite(text, color, w, h, square = false) {
+  const cw = square ? 128 : 512;
+  const ch = square ? 128 : 80;
+
+  const canvas2d = document.createElement('canvas');
+  canvas2d.width  = cw;
+  canvas2d.height = ch;
+  const ctx = canvas2d.getContext('2d');
+
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.beginPath();
+  if (ctx.roundRect) {
+    ctx.roundRect(3, 3, cw - 6, ch - 6, 10);
+  } else {
+    ctx.rect(3, 3, cw - 6, ch - 6);
+  }
+  ctx.fill();
+
+  ctx.fillStyle = color;
+  ctx.font      = `bold ${square ? 80 : 46}px Arial`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, cw / 2, ch / 2);
+
+  const tex = new THREE.CanvasTexture(canvas2d);
+  const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true });
+  const spr = new THREE.Sprite(mat);
+  spr.scale.set(w, h, 1);
+  return spr;
+}
+
+/**
+ * Add a minimal visual mesh + pointer ray to a controller object.
+ */
+function addControllerVisual(ctrl) {
+  const bodyGeo = new THREE.CylinderGeometry(0.012, 0.016, 0.11, 12);
+  const bodyMat = new THREE.MeshPhongMaterial({ color: 0x555566 });
+  const body    = new THREE.Mesh(bodyGeo, bodyMat);
+  body.rotation.x = Math.PI / 2;
+  ctrl.add(body);
+
+  const pts   = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1.2)];
+  const ray   = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.35, transparent: true }),
+  );
+  ctrl.add(ray);
+}
+
+/**
+ * Dispose geometries and materials of a group's descendants.
+ */
+function disposeGroup(g) {
+  g.traverse(obj => {
+    obj.geometry?.dispose();
+    if (obj.material) {
+      obj.material.map?.dispose();
+      obj.material.dispose();
+    }
+  });
+}
+
+/**
+ * Update the connection status indicator in the overlay.
+ */
+function setStatus(msg, state) {
+  const dot  = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  if (!dot || !text) return;
+  dot.className  = `dot ${state}`;
+  text.textContent = msg;
+}
+
+/* ─── Bootstrap ─────────────────────────────────────────────────────────── */
+connectSSE();
+setupVRButton();
+</script>
+</body>
+</html>

@@ -28,11 +28,15 @@ Dependencies: `requests`, `flask`
 
 | File | Description |
 |---|---|
-| `robot_monitor.py` | Main script: RWS client, monitor loop, Flask web server |
-| `config.ini` | Configuration (IP, port, module name, credentials, web port) |
+| `robot_monitor.py` | Main script: RWS client, monitor loop, Flask web server (HTTP + HTTPS) |
+| `config.ini` | Configuration (IP, port, module name, credentials, web port, HTTPS port) |
 | `requirements.txt` | Python package dependencies |
-| `templates/index.html` | Fullscreen projection canvas (served at `/`) |
+| `generate_cert.py` | Standalone script to regenerate the self-signed SSL certificate |
+| `templates/index.html` | Fullscreen 2-D projection canvas (served at `/`) |
 | `templates/settings.html` | Image adjustment controls (served at `/settings`) |
+| `templates/xr.html` | 3-D WebXR visualiser for Meta Quest 3 (served at `/xr` over HTTPS) |
+| `cert.pem` / `key.pem` | Auto-generated self-signed SSL certificate and private key |
+| `static/three/` | Three.js module (auto-downloaded on first run) |
 
 ---
 
@@ -71,8 +75,10 @@ The terminal prints the current lists of robtargets and wobjdata every time
 the lists change.  The web visualiser is available at:
 
 ```
-http://localhost:5000/          (projection canvas)
-http://localhost:5000/settings  (image adjustment controls)
+http://localhost:5000/           (2-D projection canvas)
+http://localhost:5000/settings   (image adjustment controls)
+https://localhost:5443/xr        (3-D XR visualiser – Meta Quest 3)
+https://<local-ip>:5443/xr       (same, accessible from Quest on LAN)
 ```
 
 ### Probe mode
@@ -210,6 +216,105 @@ and only the targets lying approximately in the table plane should be shown.
 The script uses HTTP Digest authentication, which is the default method for
 RWS.  The credentials are taken from `config.ini`.  The default ABB factory
 credentials are `Default User` / `robotics`.
+
+---
+
+## XR visualiser (`/xr`)  –  Meta Quest 3
+
+A second, independent visualiser that renders robtargets in full 3-D using
+WebXR and Three.js, designed for use in the Meta Quest 3 browser.
+
+### Requirements
+
+- Python package `cryptography` (added to `requirements.txt`).
+- The server PC must have internet access on the **first run** so that
+  Three.js can be downloaded and cached in `static/three/`.  Subsequent
+  runs work without internet.
+- The Meta Quest 3 must be on the same Wi-Fi network as the server PC.
+
+### Setup and access
+
+1. Install dependencies (if not already done):
+
+```
+pip install -r requirements.txt
+```
+
+2. Start the server normally:
+
+```
+python robot_monitor.py
+```
+
+On first startup the script will:
+- Download Three.js from the jsDelivr CDN and save it to `static/three/`.
+- Generate a self-signed SSL certificate (`cert.pem` / `key.pem`) covering
+  `localhost`, `127.0.0.1`, and all detected local network IPs.
+
+The terminal will print the HTTPS address, for example:
+
+```
+XR (WebXR/VR)  →  https://192.168.1.10:5443/xr  ← open on Meta Quest 3
+```
+
+3. Open that URL in the Meta Quest 3 browser.
+
+4. The browser will warn about the self-signed certificate.  Tap
+   **Advanced → Proceed** to continue (the connection is local-only; there
+   is no third-party security risk).
+
+5. Tap **ENTER VR** on the page.  The scene starts in immersive VR mode.
+
+### Accepting the certificate permanently (optional)
+
+To avoid the warning on every visit:
+
+1. Copy `cert.pem` to the Quest (e.g. via the Meta Quest Developer Hub or
+   `adb push cert.pem /sdcard/`).
+2. On the Quest go to **Settings → Security → Install from storage** and
+   install the certificate as a "CA certificate".
+
+### Regenerating the certificate
+
+If the server's IP address changes, regenerate the certificate:
+
+```
+python generate_cert.py
+```
+
+This replaces `cert.pem` and `key.pem` with a new certificate that covers
+the current network addresses.
+
+### 3-D scene
+
+| Element | Description |
+|---|---|
+| Coordinate-system axes | Large X (red) / Y (green) / Z (blue) arrows at the wobj origin |
+| Wobj label | Name of the first wobjdata variable, shown near the origin |
+| Robtarget markers | Orange sphere at each position with smaller X/Y/Z axis arrows showing tool orientation |
+| Name labels | Floating text label above each robtarget sphere |
+| Floor grid | Reference grid at the VR floor level (Y = 0) |
+
+The coordinate mapping is:  ABB X → VR right,  ABB Y → VR forward,
+ABB Z → VR up.  Positions are converted from mm to metres (÷ 1000).
+
+### Controller interaction
+
+| Action | Effect |
+|---|---|
+| Hold **trigger** | Move (translate) the coordinate system — rotation is unchanged |
+| Hold **grip** | Rotate the coordinate system around its origin — position is unchanged |
+| Hold both **trigger + grip** | Translate and rotate simultaneously (same or different controllers) |
+
+Individual robtargets cannot be controlled; only the whole coordinate system
+can be moved or rotated.  The wobj origin remains the pivot point for all
+rotations.
+
+### Image settings
+
+The rotation, keystone, zoom, calibration marks, and Z-filter controls on
+the `/settings` page apply **only** to the 2-D projection canvas (`/`).
+They have no effect on the XR view.
 
 ---
 

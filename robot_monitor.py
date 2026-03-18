@@ -21,20 +21,31 @@ import threading
 import argparse
 import configparser
 import os
+import socket
+import ipaddress
+import datetime
+import logging
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Optional
 
 import requests
 from requests.auth import HTTPDigestAuth
-from flask import Flask, Response, render_template
+from flask import Flask, Response, render_template, jsonify
+from werkzeug.serving import make_server
+
+# Suppress per-request werkzeug logs (Flask already silences its own logger below)
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-XHTML_NS    = "http://www.w3.org/1999/xhtml"
-CONFIG_PATH = "config.ini"
+XHTML_NS     = "http://www.w3.org/1999/xhtml"
+CONFIG_PATH  = "config.ini"
+THREE_VERSION = "0.168.0"
+CERT_FILE     = "cert.pem"
+KEY_FILE      = "key.pem"
 
 # ---------------------------------------------------------------------------
 # Flask app
@@ -84,6 +95,24 @@ def settings_page():
     return render_template("settings.html")
 
 
+@app.route("/xr")
+def xr_page():
+    return render_template(
+        "xr.html",
+        server_ip=_get_local_ip(),
+        https_port=_cfg_cache.get("https_port", 5443),
+    )
+
+
+@app.route("/api/server-info")
+def api_server_info():
+    return jsonify({
+        "ip":         _get_local_ip(),
+        "https_port": _cfg_cache.get("https_port", 5443),
+        "web_port":   _cfg_cache.get("web_port",   5000),
+    })
+
+
 @app.route("/events")
 def sse_stream():
     """Server-Sent Events endpoint – pushes JSON updates to the browser."""
@@ -117,6 +146,136 @@ def sse_stream():
             "Connection":       "keep-alive",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Config cache (populated in main, used by XR route before cfg is local)
+# ---------------------------------------------------------------------------
+
+_cfg_cache: dict = {}
+
+
+# ---------------------------------------------------------------------------
+# Local-IP helper
+# ---------------------------------------------------------------------------
+
+def _get_local_ip() -> str:
+    """Return the primary local network IP of this machine."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+# ---------------------------------------------------------------------------
+# SSL certificate generation
+# ---------------------------------------------------------------------------
+
+def _ensure_ssl_certs() -> bool:
+    """Generate self-signed cert+key if they do not already exist."""
+    if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
+        print(f"  SSL certs found: {CERT_FILE}, {KEY_FILE}")
+        return True
+
+    print("  Generating self-signed SSL certificate …")
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+        local_ips: set[str] = {"127.0.0.1"}
+        try:
+            local_ips.update(socket.gethostbyname_ex(socket.gethostname())[2])
+        except Exception:
+            pass
+        local_ips.add(_get_local_ip())
+
+        san_list: list = [x509.DNSName("localhost")]
+        for ip_str in sorted(local_ips):
+            try:
+                san_list.append(x509.IPAddress(ipaddress.ip_address(ip_str)))
+            except ValueError:
+                pass
+
+        name = x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME,       "RobProjector XR"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "RobProjector"),
+        ])
+
+        now  = datetime.datetime.now(datetime.timezone.utc)
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now)
+            .not_valid_after(now + datetime.timedelta(days=3650))
+            .add_extension(x509.SubjectAlternativeName(san_list), critical=False)
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .sign(key, hashes.SHA256())
+        )
+
+        with open(KEY_FILE, "wb") as f:
+            f.write(key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.TraditionalOpenSSL,
+                serialization.NoEncryption(),
+            ))
+        with open(CERT_FILE, "wb") as f:
+            f.write(cert.public_bytes(serialization.Encoding.PEM))
+
+        san_strs = [str(s.value) for s in san_list]
+        print(f"  Certificate written (valid 10 years)")
+        print(f"  SANs: {', '.join(san_strs)}")
+        return True
+
+    except ImportError:
+        print(
+            "[WARN] Package 'cryptography' not installed – HTTPS/XR server disabled.\n"
+            "       Install with:  pip install cryptography",
+            file=sys.stderr,
+        )
+        return False
+    except Exception as exc:
+        print(f"[WARN] Certificate generation failed: {exc}", file=sys.stderr)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Three.js static asset download
+# ---------------------------------------------------------------------------
+
+def _download_three_js() -> None:
+    """Download Three.js from CDN if not already present (server needs internet)."""
+    base_dir  = os.path.dirname(os.path.abspath(__file__))
+    three_dir = os.path.join(base_dir, "static", "three")
+    os.makedirs(three_dir, exist_ok=True)
+
+    dest = os.path.join(three_dir, "three.module.min.js")
+    if os.path.exists(dest):
+        return
+
+    url = f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.module.min.js"
+    print(f"  Downloading Three.js r{THREE_VERSION} …")
+    try:
+        resp = requests.get(url, timeout=60)
+        resp.raise_for_status()
+        with open(dest, "w", encoding="utf-8") as f:
+            f.write(resp.text)
+        print(f"  ✓ Saved ({len(resp.content) // 1024} KB) → static/three/")
+    except Exception as exc:
+        print(f"  ✗ Download failed: {exc}", file=sys.stderr)
+        print(    "    The /xr page requires Three.js.  Re-run the server with internet access,",
+              file=sys.stderr)
+        print(    "    or place three.module.min.js manually in static/three/.", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +315,7 @@ def load_config(path: str = CONFIG_PATH) -> dict:
         "username":      section.get("username",      "Default User"),
         "password":      section.get("password",      "robotics"),
         "web_port":      int(section.get("web_port",  "5000")),
+        "https_port":    int(section.get("https_port", "5443")),
     }
 
 
@@ -439,6 +599,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(CONFIG_PATH)
+    _cfg_cache.update(cfg)
 
     print("ABB Robot Variable Monitor")
     print(f"  Controller : {cfg['ip']}:{cfg['port']}")
@@ -463,11 +624,37 @@ def main() -> None:
     )
     t.start()
 
-    # Start the Flask web server in the main thread
-    web_port = cfg["web_port"]
-    print(f"\nWeb visualiser →  http://localhost:{web_port}/")
-    print(f"Settings       →  http://localhost:{web_port}/settings\n")
-    app.run(host="0.0.0.0", port=web_port, threaded=True, debug=False, use_reloader=False)
+    # Prepare XR assets
+    print("\nXR setup …")
+    _download_three_js()
+    https_ok = _ensure_ssl_certs()
+
+    local_ip   = _get_local_ip()
+    web_port   = cfg["web_port"]
+    https_port = cfg["https_port"]
+
+    # HTTP server (2-D projection) runs in a background thread
+    http_srv = make_server("0.0.0.0", web_port, app, threaded=True)
+    http_thread = threading.Thread(target=http_srv.serve_forever, daemon=True)
+    http_thread.start()
+
+    print(f"\n2-D projection →  http://localhost:{web_port}/")
+    print(f"                  http://{local_ip}:{web_port}/")
+    print(f"Settings       →  http://localhost:{web_port}/settings")
+
+    if https_ok:
+        print(f"\nXR (WebXR/VR)  →  https://localhost:{https_port}/xr")
+        print(f"                  https://{local_ip}:{https_port}/xr  ← open on Meta Quest 3")
+        print(f"\nNote: accept the self-signed certificate warning in the Quest browser.")
+        print(f"      To install the cert permanently, see README.md.\n")
+        https_srv = make_server(
+            "0.0.0.0", https_port, app, threaded=True,
+            ssl_context=(CERT_FILE, KEY_FILE),
+        )
+        https_srv.serve_forever()
+    else:
+        print("\n[WARN] HTTPS server not started (see warnings above).\n")
+        http_thread.join()
 
 
 if __name__ == "__main__":
