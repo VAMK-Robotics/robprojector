@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Projector Settings</title>
+  <style>
+    :root {
+      --bg:        #12121e;
+      --panel:     #1c1c30;
+      --border:    #2e2e50;
+      --accent:    #3a3a6e;
+      --highlight: #e05070;
+      --green:     #40c070;
+      --blue:      #4488ee;
+      --text:      #e8e8f0;
+      --muted:     #7070a0;
+      --track:     #2a2a45;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 2.5rem 1.5rem 4rem;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #fff;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 2rem 2.5rem 2.5rem;
+      width: 100%;
+      max-width: 540px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    }
+
+    .section-label {
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 1.4rem;
+    }
+
+    .control {
+      margin-bottom: 1.6rem;
+    }
+
+    .control-name {
+      display: block;
+      font-size: 0.9rem;
+      color: var(--text);
+      margin-bottom: 0.55rem;
+    }
+
+    /* Slider + number input row */
+    .input-row {
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+    }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      flex: 1;
+      height: 5px;
+      border-radius: 3px;
+      background: var(--track);
+      outline: none;
+      cursor: pointer;
+      min-width: 0;
+    }
+
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--highlight);
+      cursor: pointer;
+      transition: transform 0.12s, box-shadow 0.12s;
+    }
+
+    input[type=range]::-webkit-slider-thumb:hover {
+      transform: scale(1.25);
+      box-shadow: 0 0 0 5px rgba(224,80,112,0.22);
+    }
+
+    input[type=range].blue-thumb::-webkit-slider-thumb { background: var(--blue); }
+    input[type=range].blue-thumb::-webkit-slider-thumb:hover {
+      box-shadow: 0 0 0 5px rgba(68,136,238,0.22);
+    }
+
+    input[type=number] {
+      width: 86px;
+      flex-shrink: 0;
+      background: var(--track);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      color: var(--highlight);
+      font-family: 'Courier New', monospace;
+      font-size: 0.95rem;
+      font-weight: 600;
+      padding: 0.32rem 0.5rem;
+      text-align: right;
+      outline: none;
+      transition: border-color 0.15s;
+      -moz-appearance: textfield;
+    }
+
+    input[type=number].blue { color: var(--blue); }
+
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+
+    input[type=number]:focus { border-color: var(--highlight); }
+    input[type=number].blue:focus { border-color: var(--blue); }
+
+    .unit {
+      color: var(--muted);
+      font-size: 0.85rem;
+      flex-shrink: 0;
+      width: 2.2rem;
+    }
+
+    /* Toggle switch */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 0.9rem;
+      margin-bottom: 1.4rem;
+    }
+
+    .toggle {
+      position: relative;
+      width: 46px;
+      height: 26px;
+      flex-shrink: 0;
+    }
+
+    .toggle input { opacity: 0; width: 0; height: 0; }
+
+    .toggle-track {
+      position: absolute;
+      inset: 0;
+      background: var(--track);
+      border-radius: 13px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .toggle-track::after {
+      content: '';
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      background: var(--muted);
+      border-radius: 50%;
+      top: 3px;
+      left: 3px;
+      transition: transform 0.2s, background 0.2s;
+    }
+
+    .toggle input:checked ~ .toggle-track { background: var(--blue); }
+    .toggle input:checked ~ .toggle-track::after {
+      transform: translateX(20px);
+      background: #fff;
+    }
+
+    .toggle-label {
+      font-size: 0.92rem;
+      color: var(--text);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .cal-fields {
+      padding-left: 0.2rem;
+    }
+
+    .cal-fields.disabled { opacity: 0.4; pointer-events: none; }
+
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 2rem 0 1.8rem;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 0.8rem;
+    }
+
+    button {
+      flex: 1;
+      padding: 0.7rem 0.5rem;
+      border: none;
+      border-radius: 9px;
+      font-size: 0.88rem;
+      font-family: inherit;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: opacity 0.14s, transform 0.1s;
+    }
+
+    button:hover  { opacity: 0.88; }
+    button:active { transform: scale(0.97); }
+
+    .btn-reset { background: var(--accent);    color: #ccd; }
+    .btn-open  { background: var(--highlight); color: #fff; }
+
+    .link-row {
+      margin-top: 1.5rem;
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .link-row a { color: var(--green); text-decoration: none; }
+    .link-row a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<h1>Projector Settings</h1>
+
+<div class="card">
+
+  <!-- ── Image Transform ─────────────────────────────────────── -->
+  <p class="section-label">Image Transform</p>
+
+  <div class="control">
+    <span class="control-name">Rotation</span>
+    <div class="input-row">
+      <input type="range"  data-key="rotation" min="0"   max="360" step="0.1" value="0">
+      <input type="number" data-key="rotation" min="0"   max="360" step="0.1" value="0">
+      <span class="unit">°</span>
+    </div>
+  </div>
+
+  <div class="control">
+    <span class="control-name">Vertical Keystone</span>
+    <div class="input-row">
+      <input type="range"  data-key="vKeystone" min="-45" max="45" step="0.1" value="0">
+      <input type="number" data-key="vKeystone" min="-45" max="45" step="0.1" value="0">
+      <span class="unit">°</span>
+    </div>
+  </div>
+
+  <div class="control">
+    <span class="control-name">Horizontal Keystone</span>
+    <div class="input-row">
+      <input type="range"  data-key="hKeystone" min="-45" max="45" step="0.1" value="0">
+      <input type="number" data-key="hKeystone" min="-45" max="45" step="0.1" value="0">
+      <span class="unit">°</span>
+    </div>
+  </div>
+
+  <div class="control">
+    <span class="control-name">Zoom</span>
+    <div class="input-row">
+      <input type="range"  data-key="zoom" min="10" max="500" step="0.1" value="100">
+      <input type="number" data-key="zoom" min="10" max="500" step="0.1" value="100">
+      <span class="unit">%</span>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ── Calibration Marks ───────────────────────────────────── -->
+  <p class="section-label">Calibration Marks</p>
+
+  <div class="toggle-row">
+    <label class="toggle">
+      <input type="checkbox" id="calMarks">
+      <span class="toggle-track"></span>
+    </label>
+    <span class="toggle-label" onclick="document.getElementById('calMarks').click()">
+      Show Calibration Marks
+    </span>
+  </div>
+
+  <div class="cal-fields disabled" id="cal-fields">
+
+    <div class="control">
+      <span class="control-name">X-axis mark distance</span>
+      <div class="input-row">
+        <input type="range"  data-key="calX" class="blue-thumb" min="0" max="2000" step="1" value="500">
+        <input type="number" data-key="calX" class="blue"       min="0" max="9999" step="1" value="500">
+        <span class="unit">mm</span>
+      </div>
+    </div>
+
+    <div class="control" style="margin-bottom:0">
+      <span class="control-name">Y-axis mark distance</span>
+      <div class="input-row">
+        <input type="range"  data-key="calY" class="blue-thumb" min="0" max="2000" step="1" value="500">
+        <input type="number" data-key="calY" class="blue"       min="0" max="9999" step="1" value="500">
+        <span class="unit">mm</span>
+      </div>
+    </div>
+
+  </div>
+
+  <hr>
+
+  <!-- ── Z-filter ────────────────────────────────────────────────── -->
+  <p class="section-label">Z-filter</p>
+
+  <div class="toggle-row">
+    <label class="toggle">
+      <input type="checkbox" id="zFilterEnabled">
+      <span class="toggle-track"></span>
+    </label>
+    <span class="toggle-label" onclick="document.getElementById('zFilterEnabled').click()">
+      Filter Robtargets by Z-value
+    </span>
+  </div>
+
+  <div class="cal-fields disabled" id="zf-fields">
+    <div class="control" style="margin-bottom:0">
+      <span class="control-name">Z limit  (draws targets where |Z| ≤ limit)</span>
+      <div class="input-row">
+        <input type="range"  data-key="zFilter" class="blue-thumb" min="0" max="500" step="0.1" value="20">
+        <input type="number" data-key="zFilter" class="blue"       min="0" max="9999" step="0.1" value="20">
+        <span class="unit">mm</span>
+      </div>
+    </div>
+  </div>
+
+  <hr>
+
+  <div class="btn-row">
+    <button class="btn-reset" onclick="resetAll()">Reset All</button>
+    <button class="btn-open"  onclick="window.open('/', '_blank')">Open Display ↗</button>
+  </div>
+
+  <p class="link-row">
+    Display window:&nbsp;<a href="/" target="_blank">http://localhost/</a>
+  </p>
+
+</div>
+
+<script>
+'use strict';
+
+const SETTINGS_KEY = 'projectorSettings';
+
+const DEFAULTS = {
+  rotation:        0,
+  vKeystone:       0,
+  hKeystone:       0,
+  zoom:            100,
+  calMarks:        false,
+  calX:            500,
+  calY:            500,
+  zFilterEnabled:  false,
+  zFilter:         20,
+};
+
+/* ── Collect paired range+number inputs ─────────────────────────── */
+const sliders = {};   /* key → { range, num } for numeric controls */
+
+const NUMERIC_KEYS = ['rotation', 'vKeystone', 'hKeystone', 'zoom', 'calX', 'calY', 'zFilter'];
+for (const key of NUMERIC_KEYS) {
+  const els  = document.querySelectorAll(`[data-key="${key}"]`);
+  sliders[key] = {
+    range: [...els].find(e => e.type === 'range'),
+    num:   [...els].find(e => e.type === 'number'),
+  };
+}
+
+const calMarksEl      = document.getElementById('calMarks');
+const calFieldsEl     = document.getElementById('cal-fields');
+const zFilterEl       = document.getElementById('zFilterEnabled');
+const zFilterFieldsEl = document.getElementById('zf-fields');
+
+/* ── Sync range ↔ number and persist ───────────────────────────── */
+for (const [key, { range, num }] of Object.entries(sliders)) {
+  range.addEventListener('input', () => {
+    num.value = range.value;
+    saveSettings();
+  });
+
+  num.addEventListener('input', () => {
+    const v = parseFloat(num.value);
+    if (isNaN(v)) return;
+    /* Clamp range slider but allow number input to exceed slider range */
+    const clamped = Math.max(parseFloat(range.min), Math.min(parseFloat(range.max), v));
+    range.value = clamped;
+    saveSettings();
+  });
+
+  num.addEventListener('change', () => {
+    let v = parseFloat(num.value);
+    if (isNaN(v)) { num.value = DEFAULTS[key]; v = DEFAULTS[key]; }
+    const clamped = Math.max(parseFloat(range.min), Math.min(parseFloat(range.max), v));
+    range.value = clamped;
+    saveSettings();
+  });
+}
+
+/* ── Toggles ────────────────────────────────────────────────────── */
+function updateCalFieldsState() {
+  calFieldsEl.classList.toggle('disabled', !calMarksEl.checked);
+}
+
+function updateZFilterFieldsState() {
+  zFilterFieldsEl.classList.toggle('disabled', !zFilterEl.checked);
+}
+
+calMarksEl.addEventListener('change', () => {
+  updateCalFieldsState();
+  saveSettings();
+});
+
+zFilterEl.addEventListener('change', () => {
+  updateZFilterFieldsState();
+  saveSettings();
+});
+
+/* ── Read current settings ──────────────────────────────────────── */
+function getSettings() {
+  const s = {
+    calMarks:       calMarksEl.checked,
+    zFilterEnabled: zFilterEl.checked,
+  };
+  for (const [key, { num }] of Object.entries(sliders)) {
+    s[key] = parseFloat(num.value);
+  }
+  return s;
+}
+
+/* ── Apply settings to UI ───────────────────────────────────────── */
+function setSettings(saved) {
+  for (const [key, { range, num }] of Object.entries(sliders)) {
+    if (saved[key] !== undefined) {
+      num.value   = saved[key];
+      const clamped = Math.max(parseFloat(range.min), Math.min(parseFloat(range.max), saved[key]));
+      range.value = clamped;
+    }
+  }
+  if (saved.calMarks       !== undefined) calMarksEl.checked = !!saved.calMarks;
+  if (saved.zFilterEnabled !== undefined) zFilterEl .checked = !!saved.zFilterEnabled;
+  updateCalFieldsState();
+  updateZFilterFieldsState();
+}
+
+/* ── Persist ────────────────────────────────────────────────────── */
+function saveSettings() {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(getSettings()));
+}
+
+/* ── Reset ──────────────────────────────────────────────────────── */
+function resetAll() {
+  setSettings(DEFAULTS);
+  saveSettings();
+}
+
+/* ── Load on startup ────────────────────────────────────────────── */
+(function loadSettings() {
+  try {
+    const s = localStorage.getItem(SETTINGS_KEY);
+    if (s) setSettings(JSON.parse(s));
+  } catch (_) {}
+  updateCalFieldsState();
+  updateZFilterFieldsState();
+})();
+</script>
+
+</body>
+</html>

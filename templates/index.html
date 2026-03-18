@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>RobTarget Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+    #canvas {
+      position: absolute;
+      top: 0; left: 0;
+      background: white;
+      transform-origin: 50% 50%;
+      cursor: grab;
+    }
+    #canvas.dragging { cursor: grabbing; }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+'use strict';
+
+/* ─── Global state ────────────────────────────────────────────── */
+let robotData = { robtargets: [], wobjdata: [] };
+let settings  = { rotation: 0, vKeystone: 0, hKeystone: 0, zoom: 100,
+                  calMarks: false, calX: 500, calY: 500,
+                  zFilterEnabled: false, zFilter: 20 };
+
+/*
+ * view.ox / view.oy = canvas-pixel position of the robot/wobj origin (0, 0).
+ * view.scale        = pixels per robot-mm  (= baseScale * zoom/100).
+ *
+ * Initialised once on the first data update that contains targets.
+ * After that only mouse drag changes ox/oy, and only zoom changes scale.
+ */
+let view      = null;   // { scale, ox, oy }
+let baseScale = null;   // scale at zoom=100 %, set when view is first created
+
+/* Remember viewport size so we can adjust ox/oy proportionally on resize. */
+let lastW = 0, lastH = 0;
+
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+
+/* ─── Settings (written by /settings via localStorage) ───────── */
+const SETTINGS_KEY = 'projectorSettings';
+
+function loadSettings() {
+  try {
+    const s = localStorage.getItem(SETTINGS_KEY);
+    if (s) settings = Object.assign(settings, JSON.parse(s));
+  } catch (_) {}
+  applyTransform();
+}
+
+function applyTransform() {
+  const { rotation, vKeystone, hKeystone } = settings;
+  canvas.style.transform =
+    `rotate(${rotation}deg) ` +
+    `perspective(1200px) ` +
+    `rotateX(${vKeystone}deg) ` +
+    `rotateY(${hKeystone}deg)`;
+}
+
+function applyZoom() {
+  if (view === null || baseScale === null) return;
+  view.scale = baseScale * (settings.zoom / 100);
+  draw();
+}
+
+window.addEventListener('storage', e => {
+  if (e.key === SETTINGS_KEY) {
+    try { settings = JSON.parse(e.newValue); } catch (_) {}
+    applyTransform();
+    applyZoom();
+  }
+});
+
+/* ─── Resize ──────────────────────────────────────────────────── */
+function resize() {
+  const newW = window.innerWidth;
+  const newH = window.innerHeight;
+
+  if (view !== null && lastW > 0 && lastH > 0) {
+    /* Keep the origin at the same fractional position on screen */
+    view.ox = view.ox / lastW * newW;
+    view.oy = view.oy / lastH * newH;
+  }
+
+  lastW = newW;
+  lastH = newH;
+  canvas.width  = newW;
+  canvas.height = newH;
+  draw();
+}
+window.addEventListener('resize', resize);
+
+/* ─── View initialisation (called once, on first non-empty data) */
+function initView(targets) {
+  const W = lastW || window.innerWidth;
+  const H = lastH || window.innerHeight;
+
+  if (targets.length === 0) {
+    /* No targets yet – put origin in the centre, scale = 2 px/mm */
+    view = { scale: 2, ox: W / 2, oy: H / 2 };
+    return;
+  }
+
+  /* Bounding box: always include origin (0, 0) */
+  let minX = 0, maxX = 0, minY = 0, maxY = 0;
+  for (const t of targets) {
+    const p = parseRobtarget(t.value);
+    if (!p) continue;
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+
+  const pad    = 0.22;
+  const rangeX = (maxX - minX) || 200;
+  const rangeY = (maxY - minY) || 200;
+  const scale100 = Math.min(
+    W / (rangeX * (1 + 2 * pad)),
+    H / (rangeY * (1 + 2 * pad)),
+  );
+
+  baseScale = scale100;
+  const scale = scale100 * (settings.zoom / 100);
+
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  view = {
+    scale,
+    ox: W / 2 - cx * scale100,   /* ox/oy based on 100% scale so zoom feels centred */
+    oy: H / 2 + cy * scale100,
+  };
+}
+
+/* ─── Parse RAPID value strings ───────────────────────────────── */
+/**
+ * [[x,y,z],[q1,q2,q3,q4],[cf...],[eax...]]
+ * ABB quaternion: q1=w, q2=x, q3=y, q4=z
+ */
+function parseRobtarget(val) {
+  try {
+    const d = JSON.parse(val);
+    return {
+      x: d[0][0], y: d[0][1], z: d[0][2],
+      qw: d[1][0], qx: d[1][1], qy: d[1][2], qz: d[1][3],
+    };
+  } catch (_) { return null; }
+}
+
+/* ─── Quaternion → 2-D frame axes ─────────────────────────────── */
+function quatAxes2D(qw, qx, qy, qz) {
+  return {
+    xAxis: [1 - 2*(qy*qy + qz*qz),     2*(qx*qy + qw*qz)],
+    yAxis: [    2*(qx*qy - qw*qz),  1 - 2*(qx*qx + qz*qz)],
+  };
+}
+
+/* Robot mm → canvas px */
+function toCanvas(rx, ry, v) {
+  return { x: v.ox + rx * v.scale, y: v.oy - ry * v.scale };
+}
+
+/* ─── Drawing helpers ─────────────────────────────────────────── */
+function drawArrow(x0, y0, x1, y1, color, lw) {
+  const dx = x1 - x0, dy = y1 - y0;
+  const len = Math.hypot(dx, dy);
+  if (len < 1) return;
+  const ux = dx / len, uy = dy / len;
+  const hLen = Math.min(14, len * 0.38);
+  const hW   = hLen * 0.42;
+
+  ctx.save();
+  ctx.strokeStyle = ctx.fillStyle = color;
+  ctx.lineWidth   = lw || 2;
+  ctx.lineCap     = 'round';
+
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1 - ux * hLen, y1 - uy * hLen);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x1 - ux * hLen - uy * hW, y1 - uy * hLen + ux * hW);
+  ctx.lineTo(x1 - ux * hLen + uy * hW, y1 - uy * hLen - ux * hW);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+/* ─── Calibration mark ────────────────────────────────────────── */
+/**
+ * Draws a crosshair-circle marker at canvas position (px, py).
+ * @param {string} label  – text shown next to the mark
+ * @param {boolean} onXAxis – true → mark lies on robot X-axis, false → Y-axis
+ */
+function drawCalMark(px, py, label, onXAxis) {
+  const crossR = 13;   /* crosshair arm length px */
+  const circR  = 7;    /* inner circle radius px  */
+
+  ctx.save();
+  ctx.strokeStyle = '#0055CC';
+  ctx.fillStyle   = '#0055CC';
+  ctx.lineWidth   = 1.5;
+  ctx.setLineDash([4, 3]);
+
+  /* Crosshair arms */
+  ctx.beginPath();
+  ctx.moveTo(px - crossR, py); ctx.lineTo(px + crossR, py);
+  ctx.moveTo(px, py - crossR); ctx.lineTo(px, py + crossR);
+  ctx.stroke();
+
+  ctx.setLineDash([]);
+
+  /* Circle */
+  ctx.beginPath();
+  ctx.arc(px, py, circR, 0, 2 * Math.PI);
+  ctx.stroke();
+
+  /* Label */
+  ctx.font      = 'bold 11px monospace';
+  ctx.fillStyle = '#0055CC';
+  /* Place label to avoid overlapping with the axis arrows */
+  const offX = onXAxis ?  crossR + 5 : crossR + 5;
+  const offY = onXAxis ? -5           : -5;
+  ctx.fillText(label, px + offX, py + offY);
+
+  ctx.restore();
+}
+
+/* ─── Main render ─────────────────────────────────────────────── */
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'white';
+  ctx.fillRect(0, 0, W, H);
+
+  if (!view) return;   /* not yet initialised */
+
+  const { scale } = view;
+
+  const originAxisPx = Math.max(55,  Math.min(160, 75  * scale));
+  const targetAxisPx = Math.max(22,  Math.min(75,  32  * scale));
+  const dotR         = Math.max(4,   Math.min(12,  5.5 * scale));
+  const fontSize     = Math.round(Math.max(10, Math.min(16, 11.5 * scale)));
+
+  /* ── Wobj origin ──────────────────────────────────────────────
+   * Always drawn at view.ox / view.oy regardless of what targets exist.
+   * Dark red  = X-axis  |  Dark green = Y-axis
+   */
+  const org      = toCanvas(0, 0, view);
+  const wobjName = robotData.wobjdata.length > 0 ? robotData.wobjdata[0].name : '';
+
+  drawArrow(org.x, org.y, org.x + originAxisPx, org.y,                '#8B0000', 3.5);
+  drawArrow(org.x, org.y, org.x,                org.y - originAxisPx, '#006400', 3.5);
+
+  ctx.save();
+  ctx.font      = `bold ${Math.round(fontSize * 1.1)}px monospace`;
+  ctx.fillStyle = '#8B0000';
+  ctx.fillText('X', org.x + originAxisPx + 7, org.y + 5);
+  ctx.fillStyle = '#006400';
+  ctx.fillText('Y', org.x - 5, org.y - originAxisPx - 7);
+  if (wobjName) {
+    ctx.fillStyle = '#555';
+    ctx.font      = `${fontSize - 1}px monospace`;
+    ctx.fillText(wobjName, org.x + 8, org.y + 20);
+  }
+  ctx.restore();
+
+  /* ── Robtargets ───────────────────────────────────────────────
+   * Targets whose canvas position falls outside the viewport are skipped.
+   * Red   = tool X-axis  |  Green = tool Y-axis
+   */
+  const margin = targetAxisPx + dotR + 20;   /* generous clip margin */
+
+  for (const rt of robotData.robtargets) {
+    const p = parseRobtarget(rt.value);
+    if (!p) continue;
+
+    /* Z-filter: skip targets whose Z is outside [-zFilter, +zFilter] */
+    if (settings.zFilterEnabled && Math.abs(p.z) > settings.zFilter) continue;
+
+    const pos = toCanvas(p.x, p.y, view);
+
+    /* Skip targets outside the visible canvas (with a small margin) */
+    if (pos.x < -margin || pos.x > W + margin ||
+        pos.y < -margin || pos.y > H + margin) continue;
+
+    const axes        = quatAxes2D(p.qw, p.qx, p.qy, p.qz);
+    const [xaX, xaY]  = axes.xAxis;
+    const [yaX, yaY]  = axes.yAxis;
+
+    drawArrow(pos.x, pos.y,
+      pos.x + xaX * targetAxisPx, pos.y - xaY * targetAxisPx,
+      '#E82020', 1.8);
+
+    drawArrow(pos.x, pos.y,
+      pos.x + yaX * targetAxisPx, pos.y - yaY * targetAxisPx,
+      '#00AA00', 1.8);
+
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, dotR, 0, 2 * Math.PI);
+    ctx.fillStyle = '#111';
+    ctx.fill();
+
+    ctx.save();
+    ctx.font      = `${fontSize}px monospace`;
+    ctx.fillStyle = '#111';
+    ctx.fillText(rt.name, pos.x + dotR + 4, pos.y - dotR - 3);
+    ctx.restore();
+  }
+
+  /* ── Calibration marks ─────────────────────────────────────────
+   * X-axis mark: at robot position (calX, 0)
+   * Y-axis mark: at robot position (0, calY)
+   * Only drawn when inside the canvas; clipped otherwise.
+   */
+  if (settings.calMarks) {
+    const mX = toCanvas(settings.calX, 0, view);
+    if (mX.x >= -30 && mX.x <= W + 30 && mX.y >= -30 && mX.y <= H + 30) {
+      drawCalMark(mX.x, mX.y, `X = ${settings.calX} mm`, true);
+    }
+    const mY = toCanvas(0, settings.calY, view);
+    if (mY.x >= -30 && mY.x <= W + 30 && mY.y >= -30 && mY.y <= H + 30) {
+      drawCalMark(mY.x, mY.y, `Y = ${settings.calY} mm`, false);
+    }
+  }
+
+  /* Idle hint */
+  if (robotData.robtargets.length === 0) {
+    ctx.save();
+    ctx.font      = '18px monospace';
+    ctx.fillStyle = '#aaa';
+    ctx.textAlign = 'center';
+    ctx.fillText('Waiting for robtargets…', W / 2, H / 2 + 60);
+    ctx.restore();
+  }
+}
+
+/* ─── Mouse drag (pan the origin) ─────────────────────────────── */
+let drag = null;   /* { startX, startY, startOx, startOy } while dragging */
+
+canvas.addEventListener('mousedown', e => {
+  if (!view) return;
+  drag = { startX: e.clientX, startY: e.clientY, startOx: view.ox, startOy: view.oy };
+  canvas.classList.add('dragging');
+  e.preventDefault();
+});
+
+window.addEventListener('mousemove', e => {
+  if (!drag) return;
+  view.ox = drag.startOx + (e.clientX - drag.startX);
+  view.oy = drag.startOy + (e.clientY - drag.startY);
+  draw();
+});
+
+window.addEventListener('mouseup', () => {
+  drag = null;
+  canvas.classList.remove('dragging');
+});
+
+/* Touch support */
+canvas.addEventListener('touchstart', e => {
+  if (!view || e.touches.length !== 1) return;
+  const t = e.touches[0];
+  drag = { startX: t.clientX, startY: t.clientY, startOx: view.ox, startOy: view.oy };
+  e.preventDefault();
+}, { passive: false });
+
+window.addEventListener('touchmove', e => {
+  if (!drag || e.touches.length !== 1) return;
+  const t = e.touches[0];
+  view.ox = drag.startOx + (t.clientX - drag.startX);
+  view.oy = drag.startOy + (t.clientY - drag.startY);
+  draw();
+}, { passive: false });
+
+window.addEventListener('touchend', () => { drag = null; });
+
+/* ─── Server-Sent Events ──────────────────────────────────────── */
+function connectSSE() {
+  const src = new EventSource('/events');
+  src.onmessage = e => {
+    robotData = JSON.parse(e.data);
+    /* Initialise the view the first time we receive targets */
+    if (view === null) initView(robotData.robtargets);
+    draw();
+  };
+  src.onerror = () => console.warn('SSE disconnected – reconnecting…');
+}
+
+/* ─── Bootstrap ───────────────────────────────────────────────── */
+loadSettings();
+resize();       /* sets lastW/lastH, canvas size, and draws once */
+connectSSE();   /* initialises view on first data arrival */
+</script>
+</body>
+</html>
