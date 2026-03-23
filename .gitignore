@@ -1,0 +1,42 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# ── Auto-generated SSL certificates (contain private key) ─────────────────────
+cert.pem
+key.pem
+
+# ── Auto-downloaded Three.js assets ───────────────────────────────────────────
+static/three/
+
+# ── IDE / editor ──────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.code-workspace
+.cursor/
+
+# ── OS artefacts ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs and temporary files ───────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+*.swp
+
+# ── Distribution / packaging ──────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/

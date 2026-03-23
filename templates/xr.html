@@ -132,10 +132,10 @@
 
   <div class="panel">
     <ul class="instructions">
-      <li><strong>Trigger</strong> — hold to <em>move</em> the coordinate system (translation only)</li>
-      <li><strong>Grip</strong> — hold to <em>rotate</em> the coordinate system around its origin (rotation only)</li>
-      <li>Both buttons can be held at the same time, on the same or different controllers</li>
-      <li>Robtargets move with the coordinate&nbsp;system — they cannot be controlled individually</li>
+      <li><strong>Button A</strong> (right) / <strong>X</strong> (left) — hold to <em>move</em> the coordinate system</li>
+      <li><strong>Button B</strong> (right) / <strong>Y</strong> (left) — hold to <em>rotate</em> the coordinate system around its origin</li>
+      <li><strong>Grip</strong> — toggle the coordinate-system settings panel</li>
+      <li>In the settings panel, point with a controller and press <strong>trigger</strong> to click buttons</li>
     </ul>
   </div>
 
@@ -203,16 +203,23 @@ const originMat = new THREE.MeshPhongMaterial({ color: 0xffffff, emissive: 0x555
 const originMesh = new THREE.Mesh(originGeo, originMat);
 robotRootGroup.add(originMesh);
 
-/* Coordinate-system axes at origin  (120 mm long) */
+/* Coordinate-system axes at origin  (120 mm long) — saved for runtime resize */
 const ORIGIN_AXIS_LEN = 0.12;
-robotRootGroup.add(makeArrow(new THREE.Vector3(1, 0, 0), 0xe74c3c, ORIGIN_AXIS_LEN));
-robotRootGroup.add(makeArrow(new THREE.Vector3(0, 1, 0), 0x2ecc71, ORIGIN_AXIS_LEN));
-robotRootGroup.add(makeArrow(new THREE.Vector3(0, 0, 1), 0x3498db, ORIGIN_AXIS_LEN));
+const originXArrow = makeArrow(new THREE.Vector3(1, 0, 0), 0xe74c3c, ORIGIN_AXIS_LEN);
+const originYArrow = makeArrow(new THREE.Vector3(0, 1, 0), 0x2ecc71, ORIGIN_AXIS_LEN);
+const originZArrow = makeArrow(new THREE.Vector3(0, 0, 1), 0x3498db, ORIGIN_AXIS_LEN);
+robotRootGroup.add(originXArrow, originYArrow, originZArrow);
 
-/* Axis letter labels at arrow tips */
-robotRootGroup.add(makeAxisLabel('X', new THREE.Vector3(ORIGIN_AXIS_LEN + 0.02, 0,               0),               '#e74c3c'));
-robotRootGroup.add(makeAxisLabel('Y', new THREE.Vector3(0,               ORIGIN_AXIS_LEN + 0.02, 0),               '#2ecc71'));
-robotRootGroup.add(makeAxisLabel('Z', new THREE.Vector3(0,               0,               ORIGIN_AXIS_LEN + 0.02), '#3498db'));
+/* Axis letter labels at arrow tips — saved so positions update with length */
+const originXLabel = makeAxisLabel('X', new THREE.Vector3(ORIGIN_AXIS_LEN + 0.02, 0,               0),               '#e74c3c');
+const originYLabel = makeAxisLabel('Y', new THREE.Vector3(0,               ORIGIN_AXIS_LEN + 0.02, 0),               '#2ecc71');
+const originZLabel = makeAxisLabel('Z', new THREE.Vector3(0,               0,               ORIGIN_AXIS_LEN + 0.02), '#3498db');
+robotRootGroup.add(originXLabel, originYLabel, originZLabel);
+
+/* Calibration aids — plane and crosshair marks in ABB XY plane (toggled from Appearance menu) */
+const calibPlaneGroup = new THREE.Group();
+const calibMarksGroup = new THREE.Group();
+robotRootGroup.add(calibPlaneGroup, calibMarksGroup);
 
 /* Wobj name label (updated from SSE) */
 let wobjLabelSprite = null;
@@ -229,63 +236,663 @@ scene.add(controller1);
 addControllerVisual(controller0);
 addControllerVisual(controller1);
 
-/* ─── Trigger = translate ────────────────────────────────────────────────── */
-let triggerCtrl         = null;
+/* ─── Capture XRInputSource on connect so we can read the gamepad ───────── */
+controller0.addEventListener('connected',    evt => { controller0.userData.xrInputSource = evt.data; });
+controller1.addEventListener('connected',    evt => { controller1.userData.xrInputSource = evt.data; });
+controller0.addEventListener('disconnected', ()  => { controller0.userData.xrInputSource = null; });
+controller1.addEventListener('disconnected', ()  => { controller1.userData.xrInputSource = null; });
+
+/* ─── Button A (index 4) = translate ────────────────────────────────────── */
+let triggerCtrl           = null;
 const triggerInitCtrlPos  = new THREE.Vector3();
 const triggerInitGroupPos = new THREE.Vector3();
 
-function onSelectStart(evt) {
+function onButtonADown(ctrl) {
   if (triggerCtrl) return;
-  triggerCtrl = evt.target;
+  triggerCtrl = ctrl;
   triggerCtrl.getWorldPosition(triggerInitCtrlPos);
   triggerInitGroupPos.copy(robotRootGroup.position);
   updateHighlight();
 }
-function onSelectEnd(evt) {
-  if (triggerCtrl !== evt.target) return;
+function onButtonAUp(ctrl) {
+  if (triggerCtrl !== ctrl) return;
   triggerCtrl = null;
   updateHighlight();
 }
 
-/* ─── Grip = rotate (around coordinate-system origin) ───────────────────── */
-let gripCtrl            = null;
-const gripInitCtrlQuat  = new THREE.Quaternion();
-const gripInitGroupQuat = new THREE.Quaternion();
+/* ─── Button B (index 5) = rotate around coordinate-system origin ───────── */
+let gripCtrl              = null;
+const gripInitCtrlQuat    = new THREE.Quaternion();
+const gripInitGroupQuat   = new THREE.Quaternion();
 
-function onSqueezeStart(evt) {
+function onButtonBDown(ctrl) {
   if (gripCtrl) return;
-  gripCtrl = evt.target;
+  gripCtrl = ctrl;
   gripCtrl.getWorldQuaternion(gripInitCtrlQuat);
   gripInitGroupQuat.copy(robotRootGroup.quaternion);
   updateHighlight();
 }
-function onSqueezeEnd(evt) {
-  if (gripCtrl !== evt.target) return;
+function onButtonBUp(ctrl) {
+  if (gripCtrl !== ctrl) return;
   gripCtrl = null;
   updateHighlight();
 }
 
-controller0.addEventListener('selectstart',  onSelectStart);
-controller0.addEventListener('selectend',    onSelectEnd);
-controller0.addEventListener('squeezestart', onSqueezeStart);
-controller0.addEventListener('squeezeend',   onSqueezeEnd);
-controller1.addEventListener('selectstart',  onSelectStart);
-controller1.addEventListener('selectend',    onSelectEnd);
-controller1.addEventListener('squeezestart', onSqueezeStart);
-controller1.addEventListener('squeezeend',   onSqueezeEnd);
+/* ─── Gamepad polling — called every frame ──────────────────────────────── */
+// Previous pressed state per controller: [controller0, controller1]
+const prevA = [false, false];
+const prevB = [false, false];
+const CTRLS = [controller0, controller1];
+
+function pollButtons() {
+  for (let i = 0; i < CTRLS.length; i++) {
+    const ctrl = CTRLS[i];
+    const gp   = ctrl.userData.xrInputSource?.gamepad;
+
+    if (!gp) {
+      // Controller disconnected while button was held — force release
+      if (prevA[i]) { onButtonAUp(ctrl); prevA[i] = false; }
+      if (prevB[i]) { onButtonBUp(ctrl); prevB[i] = false; }
+      continue;
+    }
+
+    // Button A = right-hand A / left-hand X  (standard gamepad index 4)
+    const isA = gp.buttons[4]?.pressed ?? false;
+    if  (isA && !prevA[i]) onButtonADown(ctrl);
+    else if (!isA && prevA[i]) onButtonAUp(ctrl);
+    prevA[i] = isA;
+
+    // Button B = right-hand B / left-hand Y  (standard gamepad index 5)
+    const isB = gp.buttons[5]?.pressed ?? false;
+    if  (isB && !prevB[i]) onButtonBDown(ctrl);
+    else if (!isB && prevB[i]) onButtonBUp(ctrl);
+    prevB[i] = isB;
+  }
+}
 
 /* Origin sphere colour reflects active interaction */
 function updateHighlight() {
   if (triggerCtrl && gripCtrl) {
-    originMat.color.set(0xff8800); originMat.emissive.set(0x442200); // orange  = both
+    originMat.color.set(0xff8800); originMat.emissive.set(0x442200); // orange = both
   } else if (triggerCtrl) {
-    originMat.color.set(0xffd700); originMat.emissive.set(0x443300); // yellow  = translate
+    originMat.color.set(0xffd700); originMat.emissive.set(0x443300); // yellow = translate
   } else if (gripCtrl) {
-    originMat.color.set(0x00ccff); originMat.emissive.set(0x003344); // cyan    = rotate
+    originMat.color.set(0x00ccff); originMat.emissive.set(0x003344); // cyan   = rotate
   } else {
-    originMat.color.set(0xffffff); originMat.emissive.set(0x555555); // white   = idle
+    originMat.color.set(0xffffff); originMat.emissive.set(0x555555); // white  = idle
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Settings menu  (grip once = open / close)
+
+   Layout (800 × 580 canvas → 0.60 × 0.435 m panel):
+     Row 0  y= 10  Header + close button
+     Row 1  y= 80  mm-step and deg-step controls
+     Rows 2-7      X / Y / Z / rx / ry / rz  with − and + buttons
+═══════════════════════════════════════════════════════════════════════════ */
+
+const MENU_CW = 800, MENU_CH = 624;
+const MENU_PW = 0.60, MENU_PH = MENU_PW * (MENU_CH / MENU_CW); // ≈ 0.468 m
+
+/* ── Menu value state ────────────────────────────────────────────────────── */
+const menuVals = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 };
+
+const STEP_PRESETS  = [0.1, 0.5, 1, 5, 10, 50, 100];
+const mmStepObj     = { value: 1 };
+const degStepObj    = { value: 1 };
+
+/* ── Appearance-tab state ────────────────────────────────────────────────── */
+let activeTab = 0;   // 0 = Position, 1 = Appearance
+
+const ORIGIN_LEN_DEFAULT = 120;   // mm  (= ORIGIN_AXIS_LEN * 1000)
+const TARGET_LEN_DEFAULT = 60;    // mm
+const appVals   = { originLen: ORIGIN_LEN_DEFAULT, targetLen: TARGET_LEN_DEFAULT };
+const appStepObj = { value: 5 };  // mm step for the Appearance page
+
+/* Calibration state */
+const CALIB_SIZE_DEFAULT = 500;  // mm
+const appCalib   = { planeOn: false, marksOn: false, size: CALIB_SIZE_DEFAULT };
+const calibStepObj = { value: 50 };  // mm step for calibration size
+
+/* ── Visibility state ────────────────────────────────────────────────────── */
+let menuOpen   = false;
+let hoveredBtn = null;
+
+/* ── Three.js panel (built on first open) ────────────────────────────────── */
+const menuGroup = new THREE.Group();
+menuGroup.visible = false;
+scene.add(menuGroup);
+
+let menuPanel   = null;
+let menuTexture = null;
+let menuCtx     = null;
+
+/* ── Button layout ───────────────────────────────────────────────────────── */
+const BTN_H  = 52;   // button height px
+const ROW_SP = 72;   // value-row spacing px
+
+const menuButtons = [];  // populated by buildMenuButtons()
+
+function buildMenuButtons() {
+  menuButtons.length = 0;
+
+  // Always: close button
+  menuButtons.push({ x: 718, y: 10, w: 72, h: BTN_H, id: 'close', label: '✕' });
+
+  // Always: tab switcher  (y=68, h=42)
+  menuButtons.push({ x:  10, y: 68, w: 195, h: 42, id: 'tab0', label: 'Position'   });
+  menuButtons.push({ x: 215, y: 68, w: 195, h: 42, id: 'tab1', label: 'Appearance' });
+
+  if (activeTab === 0) {
+    // ── Position tab ──────────────────────────────────────────────
+    // mm step:  [−] value [+]  (y=124)
+    menuButtons.push({ x:  72, y: 124, w: BTN_H, h: BTN_H, id: 'mmStep-',  label: '−' });
+    menuButtons.push({ x: 214, y: 124, w: BTN_H, h: BTN_H, id: 'mmStep+',  label: '+' });
+    // deg step: [−] value [+]
+    menuButtons.push({ x: 420, y: 124, w: BTN_H, h: BTN_H, id: 'degStep-', label: '−' });
+    menuButtons.push({ x: 562, y: 124, w: BTN_H, h: BTN_H, id: 'degStep+', label: '+' });
+    // Value rows  (start y=200, spacing ROW_SP=72)
+    ['x','y','z','rx','ry','rz'].forEach((f, i) => {
+      const ry = 200 + i * ROW_SP;
+      menuButtons.push({ x: 456, y: ry, w: 148, h: BTN_H, id: `${f}-`, label: '−' });
+      menuButtons.push({ x: 612, y: ry, w: 148, h: BTN_H, id: `${f}+`, label: '+' });
+    });
+  } else {
+    // ── Appearance tab ────────────────────────────────────────────
+    // Origin axis length [−] value [+]  (y=170)
+    menuButtons.push({ x: 256, y: 170, w: 110, h: BTN_H, id: 'originLen-', label: '−' });
+    menuButtons.push({ x: 374, y: 170, w: 110, h: BTN_H, id: 'originLen+', label: '+' });
+    // Robtarget axis length [−] value [+]  (y=290)  — shifted +20 px right
+    menuButtons.push({ x: 276, y: 290, w: 110, h: BTN_H, id: 'targetLen-', label: '−' });
+    menuButtons.push({ x: 394, y: 290, w: 110, h: BTN_H, id: 'targetLen+', label: '+' });
+    // Appearance step [−] value [+]  (y=380)  — shifted +20 px right
+    menuButtons.push({ x:  92, y: 380, w: BTN_H, h: BTN_H, id: 'appStep-',  label: '−' });
+    menuButtons.push({ x: 234, y: 380, w: BTN_H, h: BTN_H, id: 'appStep+',  label: '+' });
+
+    // ── Calibration section  ──────────────────────────────────────
+    // Toggle buttons: [Plane ON/OFF]  [Marks ON/OFF]  (y=476)  — shifted +20 px right
+    menuButtons.push({ x:  30, y: 476, w: 185, h: BTN_H, id: 'planeToggle',
+                       label: appCalib.planeOn ? 'Plane ON' : 'Plane OFF',
+                       toggled: appCalib.planeOn });
+    menuButtons.push({ x: 225, y: 476, w: 185, h: BTN_H, id: 'marksToggle',
+                       label: appCalib.marksOn ? 'Marks ON' : 'Marks OFF',
+                       toggled: appCalib.marksOn });
+    // Size row: calibSize [−] value [+]   calibStep [−] value [+]   (y=544)  — shifted +20 px right
+    menuButtons.push({ x: 110, y: 544, w: BTN_H, h: BTN_H, id: 'calibSize-',  label: '−' });
+    menuButtons.push({ x: 270, y: 544, w: BTN_H, h: BTN_H, id: 'calibSize+',  label: '+' });
+    menuButtons.push({ x: 400, y: 544, w: BTN_H, h: BTN_H, id: 'calibStep-',  label: '−' });
+    menuButtons.push({ x: 542, y: 544, w: BTN_H, h: BTN_H, id: 'calibStep+',  label: '+' });
+  }
+}
+
+/* ── Build canvas + Three.js mesh ───────────────────────────────────────── */
+function buildMenuPanel() {
+  buildMenuButtons();
+  const c     = document.createElement('canvas');
+  c.width     = MENU_CW;
+  c.height    = MENU_CH;
+  menuCtx     = c.getContext('2d');
+  menuTexture = new THREE.CanvasTexture(c);
+  menuTexture.minFilter = THREE.LinearFilter;
+  const mat   = new THREE.MeshBasicMaterial({
+    map: menuTexture, side: THREE.DoubleSide, transparent: true,
+  });
+  menuPanel   = new THREE.Mesh(new THREE.PlaneGeometry(MENU_PW, MENU_PH), mat);
+  menuGroup.add(menuPanel);
+}
+
+/* ── Canvas drawing ──────────────────────────────────────────────────────── */
+function redrawMenu() {
+  if (!menuCtx) return;
+  const ctx = menuCtx, W = MENU_CW, H = MENU_CH;
+
+  // Background
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(8,12,24,0.97)';
+  menuRR(ctx, 2, 2, W - 4, H - 4, 18, true, false);
+  ctx.strokeStyle = '#3d7fff'; ctx.lineWidth = 4;
+  menuRR(ctx, 2, 2, W - 4, H - 4, 18, false, true);
+
+  // Header title
+  ctx.fillStyle = '#58a6ff'; ctx.font = 'bold 28px Arial';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText('Coordinate System', 20, 10 + BTN_H / 2);
+
+  // Separator: header → tabs
+  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1.5;
+  menuLine(ctx, 10, 64, W - 10, 64);
+
+  // Separator: tabs → content
+  menuLine(ctx, 10, 116, W - 10, 116);
+
+  if (activeTab === 0) {
+    // ── Position page ──────────────────────────────────────────────
+    ctx.fillStyle = '#8b949e'; ctx.font = '20px Arial';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText('mm:',  20,  124 + BTN_H / 2);
+    menuValBox(ctx, 128, 124, 82, BTN_H, fmtStep(mmStepObj.value));
+    ctx.fillText('deg:', 350, 124 + BTN_H / 2);
+    menuValBox(ctx, 476, 124, 82, BTN_H, fmtStep(degStepObj.value));
+
+    ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1.5;
+    menuLine(ctx, 10, 190, W - 10, 190);
+
+    const fields = ['x',  'y',  'z',  'rx', 'ry', 'rz'];
+    const units  = ['mm', 'mm', 'mm', '°',  '°',  '°' ];
+    const colors = ['#e74c3c','#2ecc71','#3498db','#e74c3c','#2ecc71','#3498db'];
+    for (let i = 0; i < 6; i++) {
+      const ry = 200 + i * ROW_SP;
+      ctx.fillStyle = colors[i]; ctx.font = 'bold 26px monospace';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(fields[i], 20, ry + BTN_H / 2);
+      menuValBox(ctx, 68, ry, 380, BTN_H,
+                 menuVals[fields[i]].toFixed(1) + ' ' + units[i]);
+    }
+  } else {
+    // ── Appearance page ────────────────────────────────────────────
+    ctx.fillStyle = '#8b949e'; ctx.font = 'bold 22px Arial';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+
+    ctx.fillText('Origin axes', 20, 152);
+    ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1.5;
+    menuLine(ctx, 10, 162, W - 10, 162);
+    ctx.font = '20px Arial'; ctx.textBaseline = 'middle';
+    ctx.fillText('Length:', 20, 170 + BTN_H / 2);
+    menuValBox(ctx, 130, 170, 118, BTN_H, appVals.originLen.toFixed(0) + ' mm');
+
+    ctx.font = 'bold 22px Arial'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('Robtarget axes', 100, 272);
+    menuLine(ctx, 10, 282, W - 10, 282);
+    ctx.font = '20px Arial'; ctx.textBaseline = 'middle';
+    ctx.fillText('Length:', 40, 290 + BTN_H / 2);
+    menuValBox(ctx, 150, 290, 118, BTN_H, appVals.targetLen.toFixed(0) + ' mm');
+
+    ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1.5;
+    menuLine(ctx, 10, 370, W - 10, 370);
+    ctx.font = '20px Arial'; ctx.textBaseline = 'middle';
+    ctx.fillText('step:', 40, 380 + BTN_H / 2);
+    menuValBox(ctx, 148, 380, 82, BTN_H, fmtStep(appStepObj.value));
+
+    // ── Calibration section ────────────────────────────────────────
+    ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1.5;
+    menuLine(ctx, 10, 448, W - 10, 448);
+    ctx.fillStyle = '#8b949e'; ctx.font = 'bold 22px Arial';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText('Calibration', 80, 463);
+    menuLine(ctx, 10, 470, W - 10, 470);
+    // Toggle buttons are drawn by the menuDrawBtn loop below
+    // Size + step row labels and value boxes (y=544)
+    ctx.font = '20px Arial'; ctx.textBaseline = 'middle';
+    ctx.fillText('Size:',  40,  544 + BTN_H / 2);
+    menuValBox(ctx, 166, 544, 100, BTN_H, appCalib.size.toFixed(0) + ' mm');
+    ctx.fillText('step:', 334,  544 + BTN_H / 2);
+    menuValBox(ctx, 456, 544,  82, BTN_H, fmtStep(calibStepObj.value));
+  }
+
+  // Buttons (drawn last, on top of all text/boxes)
+  for (const btn of menuButtons) menuDrawBtn(ctx, btn, btn === hoveredBtn);
+  menuTexture.needsUpdate = true;
+}
+
+/* ── Canvas helpers ──────────────────────────────────────────────────────── */
+function menuRR(ctx, x, y, w, h, r, fill, stroke) {
+  ctx.beginPath();
+  if (ctx.roundRect) { ctx.roundRect(x, y, w, h, r); }
+  else {
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y,     x + w, y + r,     r);
+    ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h);     ctx.arcTo(x, y + h,     x, y + h - r,  r);
+    ctx.lineTo(x, y + r);          ctx.arcTo(x, y,         x + r, y,      r);
+    ctx.closePath();
+  }
+  if (fill)  ctx.fill();
+  if (stroke) ctx.stroke();
+}
+
+function menuLine(ctx, x1, y1, x2, y2) {
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+}
+
+function menuValBox(ctx, x, y, w, h, text) {
+  ctx.fillStyle = '#0d1117'; ctx.strokeStyle = '#30363d'; ctx.lineWidth = 2;
+  menuRR(ctx, x, y, w, h, 6, true, true);
+  ctx.fillStyle = '#c9d1d9'; ctx.font = '21px monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + w / 2, y + h / 2);
+}
+
+function menuDrawBtn(ctx, btn, hovered) {
+  const { x, y, w, h, label, id } = btn;
+  const isClose    = id === 'close';
+  const isTab      = id === 'tab0' || id === 'tab1';
+  const isActiveTab = (id === 'tab0' && activeTab === 0) || (id === 'tab1' && activeTab === 1);
+
+  const isToggle = btn.toggled !== undefined;
+  const on       = btn.toggled === true;
+
+  let fill, stroke, color, fontSize;
+  if (isClose) {
+    fill     = hovered ? '#8b1a1a' : '#2d0000';
+    stroke   = hovered ? '#f85149' : '#6e2020';
+    color    = '#f85149';
+    fontSize = 24;
+  } else if (isTab) {
+    fill     = isActiveTab ? '#1c4d8c' : (hovered ? '#0f2d5a' : '#0d1f3c');
+    stroke   = isActiveTab ? '#58a6ff' : (hovered ? '#3d7fff' : '#1f4070');
+    color    = isActiveTab ? '#ffffff'  : '#79c0ff';
+    fontSize = 20;
+  } else if (isToggle) {
+    fill     = on ? (hovered ? '#1a6e3a' : '#0d3a1e') : (hovered ? '#1c2d40' : '#0d1f30');
+    stroke   = on ? (hovered ? '#3fb950' : '#238636') : (hovered ? '#3d7fff' : '#1f4070');
+    color    = on ? '#3fb950' : '#8b949e';
+    fontSize = 20;
+  } else {
+    fill     = hovered ? '#1c4d8c' : '#0d2040';
+    stroke   = hovered ? '#58a6ff' : '#1f4070';
+    color    = '#79c0ff';
+    fontSize = 30;
+  }
+  ctx.fillStyle = fill; ctx.strokeStyle = stroke; ctx.lineWidth = 2;
+  menuRR(ctx, x, y, w, h, isTab ? 6 : 8, true, true);
+  ctx.fillStyle = color;
+  ctx.font = `bold ${fontSize}px Arial`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(label, x + w / 2, y + h / 2);
+}
+
+function fmtStep(v) { return v < 1 ? v.toFixed(1) : String(v); }
+
+/* ── UV → button hit-test ────────────────────────────────────────────────── */
+// Three.js PlaneGeometry UV: v=0 bottom, v=1 top → canvas_y = (1-v)*MENU_CH
+function getButtonAtUV(u, v) {
+  const cx = u * MENU_CW, cy = (1 - v) * MENU_CH;
+  for (const btn of menuButtons) {
+    if (cx >= btn.x && cx <= btn.x + btn.w &&
+        cy >= btn.y && cy <= btn.y + btn.h) return btn;
+  }
+  return null;
+}
+
+/* ── Raycasting ──────────────────────────────────────────────────────────── */
+const menuRaycaster = new THREE.Raycaster();
+const _mrOrig = new THREE.Vector3();
+const _mrDir  = new THREE.Vector3();
+const _mrQ    = new THREE.Quaternion();
+
+function castMenuRay(ctrl) {
+  ctrl.getWorldPosition(_mrOrig);
+  ctrl.getWorldQuaternion(_mrQ);
+  _mrDir.set(0, 0, -1).applyQuaternion(_mrQ).normalize();
+  menuRaycaster.set(_mrOrig, _mrDir);
+  const hits = menuRaycaster.intersectObject(menuPanel);
+  return (hits.length > 0 && hits[0].uv) ? hits[0].uv : null;
+}
+
+function updateMenuHover() {
+  if (!menuOpen || !menuPanel) return;
+  let found = null;
+  for (const ctrl of [controller0, controller1]) {
+    const uv = castMenuRay(ctrl);
+    if (uv) { found = getButtonAtUV(uv.x, uv.y); if (found) break; }
+  }
+  if (found !== hoveredBtn) { hoveredBtn = found; redrawMenu(); }
+}
+
+/* ── Button activation ───────────────────────────────────────────────────── */
+function stepIncrement(stepObj, dir) {
+  const i  = STEP_PRESETS.findIndex(v => Math.abs(v - stepObj.value) < 1e-9);
+  const ni = Math.max(0, Math.min(STEP_PRESETS.length - 1, (i === -1 ? 2 : i) + dir));
+  stepObj.value = STEP_PRESETS[ni];
+}
+
+function activateMenuBtn(btn) {
+  switch (btn.id) {
+    case 'close':    closeMenu(); return;
+    case 'tab0':     activeTab = 0; buildMenuButtons(); redrawMenu(); return;
+    case 'tab1':     activeTab = 1; buildMenuButtons(); redrawMenu(); return;
+    case 'mmStep-':  stepIncrement(mmStepObj,  -1); redrawMenu(); return;
+    case 'mmStep+':  stepIncrement(mmStepObj,  +1); redrawMenu(); return;
+    case 'degStep-': stepIncrement(degStepObj, -1); redrawMenu(); return;
+    case 'degStep+': stepIncrement(degStepObj, +1); redrawMenu(); return;
+    case 'appStep-':   stepIncrement(appStepObj,   -1); redrawMenu(); return;
+    case 'appStep+':   stepIncrement(appStepObj,   +1); redrawMenu(); return;
+    case 'calibStep-': stepIncrement(calibStepObj, -1); redrawMenu(); return;
+    case 'calibStep+': stepIncrement(calibStepObj, +1); redrawMenu(); return;
+    case 'planeToggle':
+      appCalib.planeOn = !appCalib.planeOn;
+      if (calibPlaneGroup.children.length === 0) rebuildCalib();
+      else calibPlaneGroup.visible = appCalib.planeOn;
+      buildMenuButtons(); redrawMenu(); return;
+    case 'marksToggle':
+      appCalib.marksOn = !appCalib.marksOn;
+      if (calibMarksGroup.children.length === 0) rebuildCalib();
+      else calibMarksGroup.visible = appCalib.marksOn;
+      buildMenuButtons(); redrawMenu(); return;
+    case 'calibSize-':
+    case 'calibSize+': {
+      const sign = btn.id.endsWith('+') ? +1 : -1;
+      appCalib.size = Math.max(100, Math.min(2000,
+                               appCalib.size + sign * calibStepObj.value));
+      rebuildCalib(); redrawMenu(); return;
+    }
+    case 'originLen-':
+    case 'originLen+': {
+      const sign = btn.id.endsWith('+') ? +1 : -1;
+      appVals.originLen = Math.max(ORIGIN_LEN_DEFAULT * 0.5,
+                           Math.min(ORIGIN_LEN_DEFAULT * 2.0,
+                                    appVals.originLen + sign * appStepObj.value));
+      applyAppVals(); redrawMenu(); return;
+    }
+    case 'targetLen-':
+    case 'targetLen+': {
+      const sign = btn.id.endsWith('+') ? +1 : -1;
+      appVals.targetLen = Math.max(TARGET_LEN_DEFAULT * 0.5,
+                           Math.min(TARGET_LEN_DEFAULT * 2.0,
+                                    appVals.targetLen + sign * appStepObj.value));
+      applyAppVals(); redrawMenu(); return;
+    }
+  }
+  const sign  = btn.id.endsWith('+') ? +1 : -1;
+  const field = btn.id.slice(0, -1);
+
+  if (field === 'rx' || field === 'ry' || field === 'rz') {
+    // Rotate around the group's OWN local axis (post-multiply = local-axis rotation)
+    const axis  = field === 'rx' ? new THREE.Vector3(1, 0, 0)
+                : field === 'ry' ? new THREE.Vector3(0, 1, 0)
+                :                  new THREE.Vector3(0, 0, 1);
+    robotRootGroup.quaternion.multiply(
+      new THREE.Quaternion().setFromAxisAngle(
+        axis, THREE.MathUtils.degToRad(sign * degStepObj.value),
+      ),
+    );
+  } else {
+    // Translate along the group's OWN local axis
+    const d = sign * mmStepObj.value * 0.001;   // mm → m
+    const localStep = field === 'x' ? new THREE.Vector3(d, 0, 0)
+                    : field === 'y' ? new THREE.Vector3(0, d, 0)
+                    :                 new THREE.Vector3(0, 0, d);
+    // Transform local delta to world space, then add to world position
+    robotRootGroup.position.add(
+      localStep.applyQuaternion(robotRootGroup.quaternion),
+    );
+  }
+
+  syncMenuFromGroup();   // refresh display values from new world state
+  redrawMenu();
+}
+
+/* ── Sync helpers ────────────────────────────────────────────────────────── */
+function syncMenuFromGroup() {
+  const p = robotRootGroup.position;
+  menuVals.x = p.x * 1000;
+  menuVals.y = p.y * 1000;
+  menuVals.z = p.z * 1000;
+  const e = new THREE.Euler().setFromQuaternion(robotRootGroup.quaternion, 'XYZ');
+  menuVals.rx = THREE.MathUtils.radToDeg(e.x);
+  menuVals.ry = THREE.MathUtils.radToDeg(e.y);
+  menuVals.rz = THREE.MathUtils.radToDeg(e.z);
+}
+
+function applyAppVals() {
+  // Update origin-axis arrow lengths and label positions
+  const oL = appVals.originLen * 0.001;
+  const oHL = oL * 0.25, oHW = oL * 0.15;
+  originXArrow.setLength(oL, oHL, oHW);
+  originYArrow.setLength(oL, oHL, oHW);
+  originZArrow.setLength(oL, oHL, oHW);
+  const oLbl = oL + 0.02;
+  originXLabel.position.set(oLbl, 0, 0);
+  originYLabel.position.set(0, oLbl, 0);
+  originZLabel.position.set(0, 0, oLbl);
+
+  // Update every existing robtarget arrow length
+  const tL = appVals.targetLen * 0.001;
+  const tHL = tL * 0.28, tHW = tL * 0.18;
+  for (const [, g] of robtargetObjects) {
+    g.userData.xArrow.setLength(tL, tHL, tHW);
+    g.userData.yArrow.setLength(tL, tHL, tHW);
+    g.userData.zArrow.setLength(tL, tHL, tHW);
+  }
+}
+
+/* ── Calibration plane & marks ───────────────────────────────────────────── */
+function buildCrosshair(group, cx, cy, arm, color) {
+  const mat = new THREE.MeshBasicMaterial({ color });
+  const r   = 0.003;   // shaft radius 3 mm
+
+  // Arm along local X
+  const mX = new THREE.Mesh(new THREE.CylinderGeometry(r, r, arm * 2, 6), mat);
+  mX.position.set(cx, cy, 0);
+  mX.rotation.z = Math.PI / 2;
+  group.add(mX);
+
+  // Arm along local Y
+  const mY = new THREE.Mesh(new THREE.CylinderGeometry(r, r, arm * 2, 6), mat);
+  mY.position.set(cx, cy, 0);
+  group.add(mY);
+
+  // Centre dot
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(r * 2, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffff44 }),
+  );
+  dot.position.set(cx, cy, 0);
+  group.add(dot);
+}
+
+function rebuildCalib() {
+  disposeGroup(calibPlaneGroup);
+  while (calibPlaneGroup.children.length) calibPlaneGroup.remove(calibPlaneGroup.children[0]);
+  disposeGroup(calibMarksGroup);
+  while (calibMarksGroup.children.length) calibMarksGroup.remove(calibMarksGroup.children[0]);
+
+  const s   = appCalib.size * 0.001;   // mm → m
+  const arm = s * 0.04;                // crosshair arm = 4 % of size
+
+  // Semi-transparent plane — corner at origin, sides along +X and +Y axes
+  const planeMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(s, s),
+    new THREE.MeshBasicMaterial({
+      color: 0x0099cc, transparent: true, opacity: 0.12,
+      side: THREE.DoubleSide, depthWrite: false,
+    }),
+  );
+  planeMesh.position.set(s / 2, s / 2, 0);
+  calibPlaneGroup.add(planeMesh);
+
+  // Border outline: (0,0) → (s,0) → (s,s) → (0,s) → (0,0)
+  const bPts = [
+    new THREE.Vector3(0, 0, 0), new THREE.Vector3(s, 0, 0),
+    new THREE.Vector3(s, s, 0), new THREE.Vector3(0, s, 0),
+    new THREE.Vector3(0, 0, 0),
+  ];
+  calibPlaneGroup.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(bPts),
+    new THREE.LineBasicMaterial({ color: 0x33ccff }),
+  ));
+
+  // Axis guides through the plane centre
+  calibPlaneGroup.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, s/2, 0), new THREE.Vector3(s, s/2, 0),
+    ]),
+    new THREE.LineBasicMaterial({ color: 0xff6666 }),
+  ));
+  calibPlaneGroup.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(s/2, 0, 0), new THREE.Vector3(s/2, s, 0),
+    ]),
+    new THREE.LineBasicMaterial({ color: 0x66ff66 }),
+  ));
+
+  // Crosshairs on ABB axes at distance = size
+  buildCrosshair(calibMarksGroup,  s, 0, arm, 0xff4400);  // X-axis mark (orange-red)
+  buildCrosshair(calibMarksGroup,  0, s, arm, 0x44ff00);  // Y-axis mark (green)
+
+  calibPlaneGroup.visible = appCalib.planeOn;
+  calibMarksGroup.visible = appCalib.marksOn;
+}
+
+function applyMenuVals() {
+  robotRootGroup.position.set(
+    menuVals.x * 0.001, menuVals.y * 0.001, menuVals.z * 0.001,
+  );
+  robotRootGroup.setRotationFromEuler(new THREE.Euler(
+    THREE.MathUtils.degToRad(menuVals.rx),
+    THREE.MathUtils.degToRad(menuVals.ry),
+    THREE.MathUtils.degToRad(menuVals.rz),
+    'XYZ',
+  ));
+}
+
+/* ── Open / close ────────────────────────────────────────────────────────── */
+const _menuCamPos = new THREE.Vector3();
+
+function openMenu(ctrl) {
+  if (!menuPanel) buildMenuPanel();
+  menuOpen = true;
+  menuGroup.visible = true;
+  syncMenuFromGroup();
+
+  // Position 0.5 m in front of the opening controller, slightly above
+  ctrl.getWorldQuaternion(_mrQ);
+  ctrl.getWorldPosition(_mrOrig);
+  menuGroup.position.copy(_mrOrig)
+    .add(new THREE.Vector3(0, 0, -0.5).applyQuaternion(_mrQ));
+  menuGroup.position.y += 0.05;
+
+  // Face the VR camera head
+  renderer.xr.getCamera().getWorldPosition(_menuCamPos);
+  menuGroup.lookAt(_menuCamPos);
+
+  redrawMenu();
+}
+
+function closeMenu() {
+  menuOpen = false;
+  menuGroup.visible = false;
+  hoveredBtn = null;
+}
+
+/* ── Grip = toggle menu ──────────────────────────────────────────────────── */
+function onGripToggle(evt) {
+  if (menuOpen) closeMenu(); else openMenu(evt.target);
+}
+controller0.addEventListener('squeezestart', onGripToggle);
+controller1.addEventListener('squeezestart', onGripToggle);
+
+/* ── Trigger = click menu buttons ───────────────────────────────────────── */
+function onTriggerClick(evt) {
+  if (!menuOpen || !menuPanel) return;
+  const uv = castMenuRay(evt.target);
+  if (!uv) return;
+  const btn = getButtonAtUV(uv.x, uv.y);
+  if (btn) activateMenuBtn(btn);
+}
+controller0.addEventListener('selectstart', onTriggerClick);
+controller1.addEventListener('selectstart', onTriggerClick);
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Robtarget objects  (keyed by variable name)
@@ -293,7 +900,6 @@ function updateHighlight() {
 
 const robtargetObjects = new Map();   // name → THREE.Group
 const SCALE = 0.001;                  // mm → m
-const TARGET_AXIS_LEN = 0.06;        // 60 mm axis arrows
 
 function parseRobtarget(val) {
   try {
@@ -314,9 +920,10 @@ function createRobtargetGroup(name) {
   g.add(new THREE.Mesh(dotGeo, dotMat));
 
   /* Tool-orientation axis arrows — directions set on first update */
-  g.userData.xArrow = makeArrow(new THREE.Vector3(1, 0, 0), 0xe74c3c, TARGET_AXIS_LEN, true);
-  g.userData.yArrow = makeArrow(new THREE.Vector3(0, 1, 0), 0x2ecc71, TARGET_AXIS_LEN, true);
-  g.userData.zArrow = makeArrow(new THREE.Vector3(0, 0, 1), 0x3498db, TARGET_AXIS_LEN, true);
+  const tLen = appVals.targetLen * 0.001;
+  g.userData.xArrow = makeArrow(new THREE.Vector3(1, 0, 0), 0xe74c3c, tLen, true);
+  g.userData.yArrow = makeArrow(new THREE.Vector3(0, 1, 0), 0x2ecc71, tLen, true);
+  g.userData.zArrow = makeArrow(new THREE.Vector3(0, 0, 1), 0x3498db, tLen, true);
   g.add(g.userData.xArrow, g.userData.yArrow, g.userData.zArrow);
 
   /* Name label – offset along local +Z so it appears "above" in VR world space */
@@ -414,7 +1021,7 @@ function setupVRButton() {
     return;
   }
 
-  navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+  navigator.xr.isSessionSupported('immersive-ar').then(supported => {
     if (!supported) {
       xrWarning.classList.add('visible');
       vrButton.disabled = true;
@@ -431,7 +1038,7 @@ function setupVRButton() {
         return;
       }
       try {
-        const session = await navigator.xr.requestSession('immersive-vr', {
+        const session = await navigator.xr.requestSession('immersive-ar', {
           optionalFeatures: ['local-floor', 'bounded-floor'],
         });
         await renderer.xr.setSession(session);
@@ -458,7 +1065,10 @@ const _tmpPos  = new THREE.Vector3();
 const _tmpQuat = new THREE.Quaternion();
 
 renderer.setAnimationLoop(() => {
-  // Trigger → translate (position only, quaternion untouched)
+  pollButtons();
+  updateMenuHover();
+
+  // Button A → translate (position only, quaternion untouched)
   if (triggerCtrl) {
     triggerCtrl.getWorldPosition(_tmpPos);
     robotRootGroup.position.copy(triggerInitGroupPos).add(
@@ -466,7 +1076,7 @@ renderer.setAnimationLoop(() => {
     );
   }
 
-  // Grip → rotate around coordinate-system origin (quaternion only, position untouched)
+  // Button B → rotate around coordinate-system origin (quaternion only, position untouched)
   if (gripCtrl) {
     gripCtrl.getWorldQuaternion(_tmpQuat);
     // deltaQuat = currentCtrlQuat * inverse(initialCtrlQuat)

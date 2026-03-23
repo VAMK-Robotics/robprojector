@@ -302,13 +302,48 @@ ABB Z → VR up.  Positions are converted from mm to metres (÷ 1000).
 
 | Action | Effect |
 |---|---|
-| Hold **trigger** | Move (translate) the coordinate system — rotation is unchanged |
-| Hold **grip** | Rotate the coordinate system around its origin — position is unchanged |
-| Hold both **trigger + grip** | Translate and rotate simultaneously (same or different controllers) |
+| Hold **A** (right) / **X** (left) | Translate the coordinate system along its own local axes |
+| Hold **B** (right) / **Y** (left) | Rotate the coordinate system around its own local axes |
+| Hold both A+B / X+Y | Translate and rotate simultaneously |
+| Press **Grip** (either controller) | Open / close the settings menu |
+| Point + press **Trigger** (in menu) | Click a button in the settings menu |
 
-Individual robtargets cannot be controlled; only the whole coordinate system
-can be moved or rotated.  The wobj origin remains the pivot point for all
-rotations.
+Individual robtargets cannot be moved; only the whole coordinate system
+moves and rotations are applied around the local-axis pivot.
+
+### Settings menu
+
+Opened by pressing the **Grip** button on either controller.  Point the
+controller at a button and press **Trigger** to activate it.  The menu has
+two tabs.
+
+#### Position tab
+
+Fine-tune the position and orientation of the coordinate system with precise
+numeric values.
+
+| Row | Unit | Description |
+|---|---|---|
+| **x / y / z** | mm | Translate the origin along the system's local X, Y, Z axes |
+| **rx / ry / rz** | ° | Rotate around the system's local X, Y, Z axes |
+
+Each field has **−** and **+** buttons.  The step increment is shown and
+adjustable separately for mm and degrees (cycle through presets:
+0.1, 0.5, 1, 5, 10, 50, 100).
+
+#### Appearance tab
+
+| Control | Description |
+|---|---|
+| **Origin axes → Length** | Length of the X/Y/Z arrows at the coordinate-system origin (50 %–200 % of default 120 mm) |
+| **Robtarget axes → Length** | Length of the orientation arrows on each robtarget marker (50 %–200 % of default 60 mm) |
+| **step** | Increment for the length controls (same presets as position tab) |
+| **Plane ON / OFF** | Toggle a semi-transparent calibration plane in the ABB XY plane.  Its corner is at the origin; sides run along +X and +Y |
+| **Marks ON / OFF** | Toggle two crosshair markers — one on the X-axis at distance *Size*, one on the Y-axis at distance *Size* |
+| **Size** | Side length of the calibration plane and distance of the crosshair marks (100–2000 mm, default 500 mm) |
+| **step** (calib) | Increment for the Size control (default 50 mm) |
+
+Plane and marks can be used independently or together.
 
 ### Image settings
 
