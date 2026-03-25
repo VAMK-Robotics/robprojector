@@ -1,0 +1,3 @@
+Reading robtarget "Target_10": curl -u "Default User:robotics" -H "accept: application/xhtml+xml;v=2.0" "http://localhost:8800/rw/rapid/symbol/RAPID/T_ROB1/Module1/Target_10/data"
+
+Searching for robtargets: curl -u "Default User:robotics" -H "accept: application/xhtml+xml;v=2.0" -H "Content-Type: application/x-www-form-urlencoded;v=2.0" -d "view=block&vartyp=any&blockurl=RAPID/T_ROB1/Module1&symtyp=var&symtyp=con&recursive=true&dattyp=robtarget&skipshared=FALSE&onlyused=FALSE&stack=0&posl=0&posc=0" "http://localhost:8800/rw/rapid/symbols/search"

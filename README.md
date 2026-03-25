@@ -1,17 +1,17 @@
 # RobProjector
 
 A Python tool that reads RAPID robtarget and wobjdata variables from an ABB
-IRC5 robot controller via Robot Web Services (RWS) 1.0 and displays them in
-real time on a 2-D web-based projection canvas.  The web view is designed to
-be projected onto a physical work table so that programmed robot positions are
-visible directly on the surface.
+IRC5 robot controller via Robot Web Services (RWS 1.0 or 2.0) and displays
+them in real time on a 2-D web-based projection canvas.  The web view is
+designed to be projected onto a physical work table so that programmed robot
+positions are visible directly on the surface.
 
 ---
 
 ## Requirements
 
 - Python 3.10 or newer
-- ABB IRC5 controller with RobotWare 6 and RWS 1.0 enabled
+- ABB IRC5 controller with RWS enabled (RWS 1.0 or 2.0)
 - Network connection to the controller
 
 Install Python dependencies:
@@ -48,13 +48,28 @@ All parameters are set in `config.ini`:
 [robot]
 ip           = 192.168.125.1   # IP address of the IRC5 controller
 port         = 80              # RWS HTTP port (default 80)
+rws_version  = 1               # 1 for RWS 1.0, 2 for RWS 2.0
 task         = T_ROB1          # RAPID task name
 module       = MainModule      # RAPID module to monitor
 poll_interval = 2.0            # Polling interval in seconds
 username     = Default User    # RWS login username
 password     = robotics        # RWS login password
 web_port     = 5000            # Port for the local web visualiser
+https_port   = 5443            # Port for the HTTPS / WebXR server
 ```
+
+| Key | Default | Description |
+|---|---|---|
+| `ip` | `192.168.125.1` | IP address of the IRC5 controller |
+| `port` | `80` | RWS HTTP port |
+| `rws_version` | `1` | Robot Web Services version: `1` for RWS 1.0, `2` for RWS 2.0 |
+| `task` | `T_ROB1` | RAPID task name |
+| `module` | `MainModule` | RAPID module to monitor |
+| `poll_interval` | `2.0` | Polling interval in seconds |
+| `username` | `Default User` | RWS login username |
+| `password` | `robotics` | RWS login password |
+| `web_port` | `5000` | Port for the local web visualiser |
+| `https_port` | `5443` | Port for the HTTPS / WebXR server |
 
 ---
 
@@ -97,13 +112,27 @@ web server.
 
 ## How the monitor works
 
-The monitor polls the controller every `poll_interval` seconds using the
-following RWS 1.0 endpoints:
+The monitor polls the controller every `poll_interval` seconds.  The API
+endpoints differ depending on the selected RWS version:
 
-- `POST /rw/rapid/symbols?action=search-symbols` - searches for CONST
+### RWS 1.0 (`rws_version = 1`)
+
+- `POST /rw/rapid/symbols?action=search-symbols` — searches for CONST
   robtarget variables and PERS wobjdata variables in the configured module.
-- `GET /rw/rapid/symbol/data/RAPID/<task>/<module>/<variable>` - retrieves
+- `GET /rw/rapid/symbol/data/RAPID/<task>/<module>/<variable>` — retrieves
   the current value of each variable.
+
+### RWS 2.0 (`rws_version = 2`)
+
+- `POST /rw/rapid/symbols/search` — searches for VAR/CONST robtarget
+  variables and PERS wobjdata variables in the configured module.
+- `GET /rw/rapid/symbol/RAPID/<task>/<module>/<variable>/data` — retrieves
+  the current value of each variable.
+
+RWS 2.0 requests include `Accept: application/xhtml+xml;v=2.0` and
+`Content-Type: application/x-www-form-urlencoded;v=2.0` headers.
+
+---
 
 The lists are reprinted to the terminal and broadcast to all connected web
 clients whenever:
@@ -213,9 +242,14 @@ and only the targets lying approximately in the table plane should be shown.
 
 ## Authentication
 
-The script uses HTTP Digest authentication, which is the default method for
-RWS.  The credentials are taken from `config.ini`.  The default ABB factory
-credentials are `Default User` / `robotics`.
+The authentication method depends on the RWS version:
+
+- **RWS 1.0** — HTTP Digest authentication (the default for RWS 1.0
+  controllers).
+- **RWS 2.0** — HTTP Basic authentication.
+
+Credentials are taken from `config.ini` in both cases.  The default ABB
+factory credentials are `Default User` / `robotics`.
 
 ---
 
@@ -355,8 +389,10 @@ They have no effect on the XR view.
 
 ## Known limitations
 
-- Only CONST robtargets and PERS wobjdata are read.  VAR declarations are
-  not queried.
+- **RWS 1.0:** Only CONST robtargets and PERS wobjdata are read.  VAR
+  declarations are not queried.
+- **RWS 2.0:** Both VAR and CONST robtargets are read; wobjdata searches
+  for PERS declarations.
 - Only the first wobjdata variable found is shown on the canvas.  Its name
   is displayed next to the origin.
 - The Z coordinate is not used for 2-D positioning; depth information is

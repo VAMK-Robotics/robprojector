@@ -2,7 +2,8 @@
 """
 ABB Robot Variable Monitor + Web Visualiser
 Reads robtarget and wobjdata variables from an ABB IRC5 controller
-via Robot Web Services (RWS) 1.0 (base path: /rw/) and polls for changes.
+via Robot Web Services (RWS 1.0 or 2.0) and polls for changes.
+Select the RWS version with the 'rws_version' key in config.ini.
 
 The monitor runs in a background thread while a Flask web server serves:
   http://localhost:<web_port>/           – live fullscreen 2-D canvas
@@ -28,9 +29,10 @@ import logging
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urlencode
 
 import requests
-from requests.auth import HTTPDigestAuth
+from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 from flask import Flask, Response, render_template, jsonify
 from werkzeug.serving import make_server
 
@@ -316,6 +318,7 @@ def load_config(path: str = CONFIG_PATH) -> dict:
         "password":      section.get("password",      "robotics"),
         "web_port":      int(section.get("web_port",  "5000")),
         "https_port":    int(section.get("https_port", "5443")),
+        "rws_version":   int(section.get("rws_version", "1")),
     }
 
 
@@ -512,6 +515,175 @@ class RWSClient:
 
 
 # ---------------------------------------------------------------------------
+# RWS 2.0 client
+# ---------------------------------------------------------------------------
+
+class RWS2Client(RWSClient):
+    """Thin wrapper around the ABB RWS 2.0 REST API.
+
+    Inherits connection handling and XML parsing from RWSClient;
+    overrides endpoints, headers, and response parsing for RWS 2.0.
+    """
+
+    def __init__(self, cfg: dict) -> None:
+        super().__init__(cfg)
+        self.session.auth = HTTPBasicAuth(cfg["username"], cfg["password"])
+        self.session.headers.update({"Accept": "application/xhtml+xml;v=2.0"})
+
+    # ------------------------------------------------------------------
+    # Endpoint discovery (--probe mode)
+    # ------------------------------------------------------------------
+
+    def probe_endpoints(self, task: str, module: str) -> None:
+        candidates = [
+            ("POST", "/rw/rapid/symbols/search"),
+            ("POST", "/rw/rapid/symbols"),
+            ("GET",  f"/rw/rapid/symbol/RAPID/{task}/{module}"),
+            ("GET",  "/rw/rapid"),
+            ("GET",  "/rw/rapid/tasks"),
+            ("GET",  f"/rw/rapid/tasks/{task}"),
+            ("GET",  "/"),
+        ]
+        post_body = urlencode([
+            ("view", "block"), ("vartyp", "any"),
+            ("blockurl", f"RAPID/{task}/{module}"),
+            ("symtyp", "var"), ("symtyp", "con"),
+            ("recursive", "true"), ("dattyp", "robtarget"),
+            ("skipshared", "FALSE"), ("onlyused", "FALSE"),
+            ("stack", "0"), ("posl", "0"), ("posc", "0"),
+        ])
+        post_headers = {"Content-Type": "application/x-www-form-urlencoded;v=2.0"}
+
+        print(f"\n{'─' * 70}")
+        print(f"  ENDPOINT PROBE (RWS 2.0)  –  {self.base_url}")
+        print(f"{'─' * 70}")
+        print(f"  {'METHOD':<6}  {'PATH':<45}  STATUS  BODY PREVIEW")
+        print(f"  {'──────':<6}  {'────────────────────────────────────────────':<45}  ──────  ────────────")
+        for method, path in candidates:
+            url = f"{self.base_url}{path}"
+            try:
+                if method == "POST":
+                    resp = self.session.request(
+                        method, url, data=post_body,
+                        headers=post_headers, timeout=10,
+                    )
+                else:
+                    resp = self.session.request(method, url, timeout=10)
+                preview = resp.text.strip().replace("\n", " ")[:60]
+                print(f"  {method:<6}  {path:<45}  {resp.status_code:<6}  {preview}")
+            except requests.ConnectionError:
+                print(f"  {method:<6}  {path:<45}  CONNECTION ERROR")
+            except requests.Timeout:
+                print(f"  {method:<6}  {path:<45}  TIMEOUT")
+        print(f"{'─' * 70}")
+        print("\nRows with status 200 or 201 are working endpoints.")
+
+    # ------------------------------------------------------------------
+    # Symbol search
+    # ------------------------------------------------------------------
+
+    def search_symbols(self, type_name: str, symtyp: str = "con") -> list[str]:
+        """
+        POST /rw/rapid/symbols/search
+        Returns variable names of *type_name* in the configured module.
+        """
+        symtyp_values = ["var", "con"] if symtyp == "con" else [symtyp]
+
+        body_params: list[tuple[str, str]] = [
+            ("view", "block"),
+            ("vartyp", "any"),
+            ("blockurl", f"RAPID/{self.task}/{self.module}"),
+        ]
+        for sv in symtyp_values:
+            body_params.append(("symtyp", sv))
+        body_params.extend([
+            ("recursive", "true"),
+            ("dattyp", type_name),
+            ("skipshared", "FALSE"),
+            ("onlyused", "FALSE"),
+            ("stack", "0"),
+            ("posl", "0"),
+            ("posc", "0"),
+        ])
+
+        url = f"{self.base_url}/rw/rapid/symbols/search"
+        try:
+            resp = self.session.post(
+                url,
+                data=urlencode(body_params),
+                headers={"Content-Type": "application/x-www-form-urlencoded;v=2.0"},
+                timeout=10,
+            )
+            root = self._parse_response(resp, url)
+        except requests.ConnectionError:
+            print(f"[ERROR] Cannot connect to {self.base_url}", file=sys.stderr)
+            return []
+        except requests.Timeout:
+            print(f"[ERROR] Request timed out – {url}", file=sys.stderr)
+            return []
+
+        if root is None:
+            return []
+
+        names: list[str] = []
+
+        # Strategy 1: <li class="rap-sympropvar-li"> with <span class="name">
+        for li in root.iter(f"{{{XHTML_NS}}}li"):
+            if "rap-sympropvar-li" not in (li.get("class") or ""):
+                continue
+            span = li.find(f"{{{XHTML_NS}}}span[@class='name']")
+            if span is not None and span.text:
+                names.append(span.text.strip())
+                continue
+            title = li.get("title", "")
+            if title and ("RAPID/" in title):
+                name = title.rstrip("/").split("/")[-1]
+                if name:
+                    names.append(name)
+
+        # Strategy 2: all <a href> tags containing /RAPID/ (different response layouts)
+        if not names:
+            for a in root.iter(f"{{{XHTML_NS}}}a"):
+                href = a.get("href", "")
+                if not href or "/RAPID/" not in href:
+                    continue
+                parts = href.rstrip("/").split("/")
+                while parts and parts[-1] in ("properties", "data"):
+                    parts.pop()
+                if parts:
+                    name = parts[-1].split("?")[0]
+                    if name:
+                        names.append(name)
+
+        if not names:
+            raw = ET.tostring(root, encoding="unicode")[:1000]
+            print(f"[DEBUG] RWS2 search returned no symbols. Response:\n{raw}",
+                  file=sys.stderr)
+        return names
+
+    # ------------------------------------------------------------------
+    # Symbol value
+    # ------------------------------------------------------------------
+
+    def get_value(self, var_name: str) -> str:
+        """
+        GET /rw/rapid/symbol/RAPID/<task>/<module>/<var>/data
+        Value is in: <li class="rap-data"><span class="value">…</span></li>
+        """
+        root = self._get(
+            f"/rw/rapid/symbol/RAPID/{self.task}/{self.module}/{var_name}/data"
+        )
+        if root is None:
+            return "<unavailable>"
+        for li in root.iter(f"{{{XHTML_NS}}}li"):
+            if li.get("class") == "rap-data":
+                span = li.find(f"{{{XHTML_NS}}}span[@class='value']")
+                if span is not None:
+                    return (span.text or "").strip() or "<empty>"
+        return "<unavailable>"
+
+
+# ---------------------------------------------------------------------------
 # Console formatting helpers
 # ---------------------------------------------------------------------------
 
@@ -589,7 +761,7 @@ def monitor(client: RWSClient, poll_interval: float) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Monitor RAPID robtarget/wobjdata variables via RWS 1.0 and serve a live web visualiser."
+        description="Monitor RAPID robtarget/wobjdata variables via RWS (1.0 or 2.0) and serve a live web visualiser."
     )
     parser.add_argument(
         "--probe",
@@ -601,13 +773,19 @@ def main() -> None:
     cfg = load_config(CONFIG_PATH)
     _cfg_cache.update(cfg)
 
-    print("ABB Robot Variable Monitor")
-    print(f"  Controller : {cfg['ip']}:{cfg['port']}")
-    print(f"  Task       : {cfg['task']}")
-    print(f"  Module     : {cfg['module']}")
-    print(f"  User       : {cfg['username']}")
+    rws_ver = cfg["rws_version"]
 
-    client = RWSClient(cfg)
+    print("ABB Robot Variable Monitor")
+    print(f"  Controller  : {cfg['ip']}:{cfg['port']}")
+    print(f"  Task        : {cfg['task']}")
+    print(f"  Module      : {cfg['module']}")
+    print(f"  User        : {cfg['username']}")
+    print(f"  RWS version : {'2.0' if rws_ver == 2 else '1.0'}")
+
+    if rws_ver == 2:
+        client = RWS2Client(cfg)
+    else:
+        client = RWSClient(cfg)
 
     print("\nChecking connection …")
     if not client.check_connection():
