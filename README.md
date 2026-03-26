@@ -1,17 +1,25 @@
 # RobProjector
 
 A Python tool that reads RAPID robtarget and wobjdata variables from an ABB
-IRC5 robot controller via Robot Web Services (RWS 1.0 or 2.0) and displays
-them in real time on a 2-D web-based projection canvas.  The web view is
-designed to be projected onto a physical work table so that programmed robot
-positions are visible directly on the surface.
+robot controller via Robot Web Services (RWS) and displays them in real time
+on a 2-D web-based projection canvas.  The web view is designed to be
+projected onto a physical work table so that programmed robot positions are
+visible directly on the surface.
+
+Supported controllers:
+
+| Controller | RWS version | `rws_version` |
+|---|---|---|
+| IRC5 (RobotWare 6) | RWS 1.0 | `1` |
+| IRC5 (RobotWare 7) | RWS 2.0 | `2` |
+| OmniCore (RobotWare 7) | RWS 2.0 | `2` |
 
 ---
 
 ## Requirements
 
 - Python 3.10 or newer
-- ABB IRC5 controller with RWS enabled (RWS 1.0 or 2.0)
+- ABB IRC5 or OmniCore controller with RWS enabled (RWS 1.0 or 2.0)
 - Network connection to the controller
 
 Install Python dependencies:
