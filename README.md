@@ -54,7 +54,7 @@ All parameters are set in `config.ini`:
 
 ```ini
 [robot]
-ip           = 192.168.125.1   # IP address of the IRC5 controller
+ip           = 192.168.125.1   # IP address of the robot controller
 port         = 80              # RWS HTTP port (default 80)
 rws_version  = 1               # 1 for RWS 1.0, 2 for RWS 2.0
 task         = T_ROB1          # RAPID task name
@@ -68,7 +68,7 @@ https_port   = 5443            # Port for the HTTPS / WebXR server
 
 | Key | Default | Description |
 |---|---|---|
-| `ip` | `192.168.125.1` | IP address of the IRC5 controller |
+| `ip` | `192.168.125.1` | IP address of the robot controller |
 | `port` | `80` | RWS HTTP port |
 | `rws_version` | `1` | Robot Web Services version: `1` for RWS 1.0, `2` for RWS 2.0 |
 | `task` | `T_ROB1` | RAPID task name |
@@ -202,10 +202,11 @@ the browser's `localStorage` and survive page refreshes.
 
 | Setting | Range | Description |
 |---|---|---|
-| Rotation | 0 - 360 deg | Rotates the entire canvas image |
+| Rotation | 0 - 360 deg | Rotates the coordinate system (wobj origin, robtargets, calibration marks) around the wobj origin. The canvas aspect ratio and keystone correction are not affected. |
 | Vertical Keystone | -45 - +45 deg | Corrects vertical trapezoidal distortion caused by the projector being angled toward or away from the table |
 | Horizontal Keystone | -45 - +45 deg | Corrects horizontal trapezoidal distortion caused by the projector being angled sideways |
-| Zoom | 10 - 500 % | Scales the image around the wobj origin |
+| Zoom X | 10 - 500 % | Scales the image horizontally around the wobj origin |
+| Zoom Y | 10 - 500 % | Scales the image vertically around the wobj origin |
 
 All transform controls have both a slider and a number input field that are
 kept in sync.  The number field accepts values typed directly.

@@ -27,7 +27,7 @@
 
 /* ─── Global state ────────────────────────────────────────────── */
 let robotData = { robtargets: [], wobjdata: [] };
-let settings  = { rotation: 0, vKeystone: 0, hKeystone: 0, zoom: 100,
+let settings  = { rotation: 0, vKeystone: 0, hKeystone: 0, zoomX: 100, zoomY: 100,
                   calMarks: false, calX: 500, calY: 500,
                   zFilterEnabled: false, zFilter: 20 };
 
@@ -59,9 +59,10 @@ function loadSettings() {
 }
 
 function applyTransform() {
-  const { rotation, vKeystone, hKeystone } = settings;
+  const { vKeystone, hKeystone } = settings;
+  /* Rotation is applied inside draw() so only the coordinate system rotates,
+     not the aspect ratio or keystone correction. */
   canvas.style.transform =
-    `rotate(${rotation}deg) ` +
     `perspective(1200px) ` +
     `rotateX(${vKeystone}deg) ` +
     `rotateY(${hKeystone}deg)`;
@@ -69,7 +70,8 @@ function applyTransform() {
 
 function applyZoom() {
   if (view === null || baseScale === null) return;
-  view.scale = baseScale * (settings.zoom / 100);
+  view.scaleX = baseScale * (settings.zoomX / 100);
+  view.scaleY = baseScale * (settings.zoomY / 100);
   draw();
 }
 
@@ -107,7 +109,7 @@ function initView(targets) {
 
   if (targets.length === 0) {
     /* No targets yet – put origin in the centre, scale = 2 px/mm */
-    view = { scale: 2, ox: W / 2, oy: H / 2 };
+    view = { scaleX: 2, scaleY: 2, ox: W / 2, oy: H / 2 };
     return;
   }
 
@@ -129,14 +131,14 @@ function initView(targets) {
   );
 
   baseScale = scale100;
-  const scale = scale100 * (settings.zoom / 100);
 
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
   view = {
-    scale,
-    ox: W / 2 - cx * scale100,   /* ox/oy based on 100% scale so zoom feels centred */
-    oy: H / 2 + cy * scale100,
+    scaleX: baseScale * (settings.zoomX / 100),
+    scaleY: baseScale * (settings.zoomY / 100),
+    ox: W / 2 - cx * baseScale,   /* ox/oy based on 100% scale so zoom feels centred */
+    oy: H / 2 + cy * baseScale,
   };
 }
 
@@ -165,7 +167,7 @@ function quatAxes2D(qw, qx, qy, qz) {
 
 /* Robot mm → canvas px */
 function toCanvas(rx, ry, v) {
-  return { x: v.ox + rx * v.scale, y: v.oy - ry * v.scale };
+  return { x: v.ox + rx * v.scaleX, y: v.oy - ry * v.scaleY };
 }
 
 /* ─── Drawing helpers ─────────────────────────────────────────── */
@@ -245,42 +247,53 @@ function draw() {
 
   if (!view) return;   /* not yet initialised */
 
-  const { scale } = view;
+  const { scaleX, scaleY } = view;
+  const scaleAvg = Math.sqrt(scaleX * scaleY);   /* for uniform sizes (dots, font) */
 
-  const originAxisPx = Math.max(55,  Math.min(160, 75  * scale));
-  const targetAxisPx = Math.max(22,  Math.min(75,  32  * scale));
-  const dotR         = Math.max(4,   Math.min(12,  5.5 * scale));
-  const fontSize     = Math.round(Math.max(10, Math.min(16, 11.5 * scale)));
+  const originAxisPxX = Math.max(55,  Math.min(160, 75  * scaleX));
+  const originAxisPxY = Math.max(55,  Math.min(160, 75  * scaleY));
+  const targetAxisPxX = Math.max(22,  Math.min(75,  32  * scaleX));
+  const targetAxisPxY = Math.max(22,  Math.min(75,  32  * scaleY));
+  const dotR          = Math.max(4,   Math.min(12,  5.5 * scaleAvg));
+  const fontSize      = Math.round(Math.max(10, Math.min(16, 11.5 * scaleAvg)));
+
+  /* ── Rotate the canvas context around the wobj origin ─────────
+   * This rotates only the drawn coordinate system and targets.
+   * The canvas element's CSS keystone transform is unaffected.
+   */
+  const org    = toCanvas(0, 0, view);
+  const rotRad = settings.rotation * Math.PI / 180;
+
+  ctx.save();
+  ctx.translate(org.x, org.y);
+  ctx.rotate(rotRad);
+  ctx.translate(-org.x, -org.y);
 
   /* ── Wobj origin ──────────────────────────────────────────────
    * Always drawn at view.ox / view.oy regardless of what targets exist.
    * Dark red  = X-axis  |  Dark green = Y-axis
    */
-  const org      = toCanvas(0, 0, view);
   const wobjName = robotData.wobjdata.length > 0 ? robotData.wobjdata[0].name : '';
 
-  drawArrow(org.x, org.y, org.x + originAxisPx, org.y,                '#8B0000', 3.5);
-  drawArrow(org.x, org.y, org.x,                org.y - originAxisPx, '#006400', 3.5);
+  drawArrow(org.x, org.y, org.x + originAxisPxX, org.y,                 '#8B0000', 3.5);
+  drawArrow(org.x, org.y, org.x,                 org.y - originAxisPxY, '#006400', 3.5);
 
-  ctx.save();
   ctx.font      = `bold ${Math.round(fontSize * 1.1)}px monospace`;
   ctx.fillStyle = '#8B0000';
-  ctx.fillText('X', org.x + originAxisPx + 7, org.y + 5);
+  ctx.fillText('X', org.x + originAxisPxX + 7, org.y + 5);
   ctx.fillStyle = '#006400';
-  ctx.fillText('Y', org.x - 5, org.y - originAxisPx - 7);
+  ctx.fillText('Y', org.x - 5, org.y - originAxisPxY - 7);
   if (wobjName) {
     ctx.fillStyle = '#555';
     ctx.font      = `${fontSize - 1}px monospace`;
     ctx.fillText(wobjName, org.x + 8, org.y + 20);
   }
-  ctx.restore();
 
   /* ── Robtargets ───────────────────────────────────────────────
-   * Targets whose canvas position falls outside the viewport are skipped.
+   * Visibility culling is skipped: pre-rotation pixel coordinates are not
+   * reliable for screen-space clipping when rotation is active.
    * Red   = tool X-axis  |  Green = tool Y-axis
    */
-  const margin = targetAxisPx + dotR + 20;   /* generous clip margin */
-
   for (const rt of robotData.robtargets) {
     const p = parseRobtarget(rt.value);
     if (!p) continue;
@@ -290,20 +303,18 @@ function draw() {
 
     const pos = toCanvas(p.x, p.y, view);
 
-    /* Skip targets outside the visible canvas (with a small margin) */
-    if (pos.x < -margin || pos.x > W + margin ||
-        pos.y < -margin || pos.y > H + margin) continue;
-
     const axes        = quatAxes2D(p.qw, p.qx, p.qy, p.qz);
     const [xaX, xaY]  = axes.xAxis;
     const [yaX, yaY]  = axes.yAxis;
 
+    /* Scale each direction component by its own axis scale so arrows
+       correctly reflect the (potentially non-uniform) coordinate space. */
     drawArrow(pos.x, pos.y,
-      pos.x + xaX * targetAxisPx, pos.y - xaY * targetAxisPx,
+      pos.x + xaX * targetAxisPxX, pos.y - xaY * targetAxisPxY,
       '#E82020', 1.8);
 
     drawArrow(pos.x, pos.y,
-      pos.x + yaX * targetAxisPx, pos.y - yaY * targetAxisPx,
+      pos.x + yaX * targetAxisPxX, pos.y - yaY * targetAxisPxY,
       '#00AA00', 1.8);
 
     ctx.beginPath();
@@ -311,30 +322,25 @@ function draw() {
     ctx.fillStyle = '#111';
     ctx.fill();
 
-    ctx.save();
     ctx.font      = `${fontSize}px monospace`;
     ctx.fillStyle = '#111';
     ctx.fillText(rt.name, pos.x + dotR + 4, pos.y - dotR - 3);
-    ctx.restore();
   }
 
   /* ── Calibration marks ─────────────────────────────────────────
    * X-axis mark: at robot position (calX, 0)
    * Y-axis mark: at robot position (0, calY)
-   * Only drawn when inside the canvas; clipped otherwise.
    */
   if (settings.calMarks) {
     const mX = toCanvas(settings.calX, 0, view);
-    if (mX.x >= -30 && mX.x <= W + 30 && mX.y >= -30 && mX.y <= H + 30) {
-      drawCalMark(mX.x, mX.y, `X = ${settings.calX} mm`, true);
-    }
+    drawCalMark(mX.x, mX.y, `X = ${settings.calX} mm`, true);
     const mY = toCanvas(0, settings.calY, view);
-    if (mY.x >= -30 && mY.x <= W + 30 && mY.y >= -30 && mY.y <= H + 30) {
-      drawCalMark(mY.x, mY.y, `Y = ${settings.calY} mm`, false);
-    }
+    drawCalMark(mY.x, mY.y, `Y = ${settings.calY} mm`, false);
   }
 
-  /* Idle hint */
+  ctx.restore();   /* end of rotated coordinate system */
+
+  /* ── Idle hint (fixed screen position, outside rotation) ──── */
   if (robotData.robtargets.length === 0) {
     ctx.save();
     ctx.font      = '18px monospace';
