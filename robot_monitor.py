@@ -15,6 +15,7 @@ Usage:
 """
 
 import sys
+import re
 import time
 import json
 import queue
@@ -61,7 +62,7 @@ app.logger.disabled = True          # suppress Flask request logs in terminal
 # SSE broadcast infrastructure (thread-safe)
 # ---------------------------------------------------------------------------
 
-_shared: dict = {"robtargets": [], "wobjdata": []}
+_shared: dict = {"robtargets": [], "wobjdata": [], "path": []}
 _shared_lock  = threading.Lock()
 
 _subscribers: list[queue.Queue] = []
@@ -319,6 +320,7 @@ def load_config(path: str = CONFIG_PATH) -> dict:
         "web_port":      int(section.get("web_port",  "5000")),
         "https_port":    int(section.get("https_port", "5443")),
         "rws_version":   int(section.get("rws_version", "1")),
+        "routine":       section.get("routine",       "main"),
     }
 
 
@@ -513,6 +515,46 @@ class RWSClient:
         names = self.search_symbols(type_name, symtyp=symtyp)
         return [RapidVariable(name=n, value=self.get_value(n)) for n in names]
 
+    # ------------------------------------------------------------------
+    # Module source download (save to $TEMP, then fetch via File Service)
+    # ------------------------------------------------------------------
+
+    def get_module_text(self) -> str:
+        """Save the active module to $TEMP via the RAPID save endpoint,
+        then download the file via the RWS File Service."""
+        save_url = f"{self.base_url}/rw/rapid/modules/{self.module}"
+        try:
+            resp = self.session.post(
+                save_url,
+                params={"task": self.task, "action": "save"},
+                data={"name": self.module, "path": "$TEMP"},
+                timeout=15,
+            )
+            if resp.status_code not in (200, 204):
+                print(f"[ERROR] HTTP {resp.status_code} saving module – {save_url}",
+                      file=sys.stderr)
+                return ""
+        except requests.ConnectionError:
+            print(f"[ERROR] Cannot connect to {self.base_url}", file=sys.stderr)
+            return ""
+        except requests.Timeout:
+            print(f"[ERROR] Timeout saving module – {save_url}", file=sys.stderr)
+            return ""
+
+        dl_url = f"{self.base_url}/fileservice/$TEMP/{self.module}.mod"
+        try:
+            resp = self.session.get(dl_url, headers={"Accept": "*/*"}, timeout=15)
+            resp.raise_for_status()
+            return resp.text
+        except requests.HTTPError:
+            print(f"[ERROR] HTTP {resp.status_code} downloading module – {dl_url}",
+                  file=sys.stderr)
+        except requests.ConnectionError:
+            print(f"[ERROR] Cannot connect to {self.base_url}", file=sys.stderr)
+        except requests.Timeout:
+            print(f"[ERROR] Timeout downloading module – {dl_url}", file=sys.stderr)
+        return ""
+
 
 # ---------------------------------------------------------------------------
 # RWS 2.0 client
@@ -682,6 +724,155 @@ class RWS2Client(RWSClient):
                     return (span.text or "").strip() or "<empty>"
         return "<unavailable>"
 
+    def get_module_text(self) -> str:
+        """RWS 2.0 override — save POST needs Content-Type with v=2.0."""
+        save_url = f"{self.base_url}/rw/rapid/modules/{self.module}"
+        try:
+            resp = self.session.post(
+                save_url,
+                params={"task": self.task, "action": "save"},
+                data=urlencode([("name", self.module), ("path", "$TEMP")]),
+                headers={"Content-Type": "application/x-www-form-urlencoded;v=2.0"},
+                timeout=15,
+            )
+            if resp.status_code not in (200, 204):
+                print(f"[ERROR] HTTP {resp.status_code} saving module – {save_url}",
+                      file=sys.stderr)
+                return ""
+        except requests.ConnectionError:
+            print(f"[ERROR] Cannot connect to {self.base_url}", file=sys.stderr)
+            return ""
+        except requests.Timeout:
+            print(f"[ERROR] Timeout saving module – {save_url}", file=sys.stderr)
+            return ""
+
+        dl_url = f"{self.base_url}/fileservice/$TEMP/{self.module}.mod"
+        try:
+            resp = self.session.get(dl_url, headers={"Accept": "*/*"}, timeout=15)
+            resp.raise_for_status()
+            return resp.text
+        except requests.HTTPError:
+            print(f"[ERROR] HTTP {resp.status_code} downloading module – {dl_url}",
+                  file=sys.stderr)
+        except requests.ConnectionError:
+            print(f"[ERROR] Cannot connect to {self.base_url}", file=sys.stderr)
+        except requests.Timeout:
+            print(f"[ERROR] Timeout downloading module – {dl_url}", file=sys.stderr)
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# RAPID source parsing
+# ---------------------------------------------------------------------------
+
+_ZONE_MAP = {
+    "fine": 0, "z0": 0.3, "z1": 1, "z5": 5, "z10": 10, "z15": 15,
+    "z20": 20, "z30": 30, "z40": 40, "z50": 50, "z60": 60, "z80": 80,
+    "z100": 100, "z150": 150, "z200": 200,
+}
+
+_MOVE_RE = re.compile(r"\b(MoveL|MoveJ|MoveC)\b(.*?);", re.IGNORECASE | re.DOTALL)
+_IDENT_RE = re.compile(r"^[A-Za-z_]\w*$")
+
+
+def _split_rapid_args(s: str) -> list[str]:
+    """Split RAPID arguments by comma, respecting nested brackets."""
+    args: list[str] = []
+    depth = 0
+    buf: list[str] = []
+    for ch in s:
+        if ch in "([":
+            depth += 1
+            buf.append(ch)
+        elif ch in ")]":
+            depth -= 1
+            buf.append(ch)
+        elif ch == "," and depth == 0:
+            args.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        args.append("".join(buf).strip())
+    return args
+
+
+def _parse_zone(zone_str: str) -> float:
+    """Convert a RAPID zone token (e.g. 'z50', 'fine') to a radius in mm."""
+    val = _ZONE_MAP.get(zone_str.lower(), -1)
+    if val >= 0:
+        return val
+    z_match = re.match(r"^z(\d+)$", zone_str, re.IGNORECASE)
+    return float(z_match.group(1)) if z_match else 0
+
+
+def parse_routine_moves(source: str, routine: str) -> list[dict]:
+    """Extract MoveL/MoveJ/MoveC instructions from a named PROC in RAPID source.
+
+    Returns a list of dicts:
+      MoveL/MoveJ: {"target": str, "move_type": "L"|"J", "zone": float}
+      MoveC:       {"target": str, "move_type": "C", "zone": float[, "via": str]}
+    Only named targets (simple identifiers) are included; inline values are skipped.
+    For MoveC the "via" (CirPoint) is included only when it is a named identifier.
+    """
+    proc_re = re.compile(
+        rf"\bPROC\s+{re.escape(routine)}\s*\(.*?\)(.*?)\bENDPROC\b",
+        re.DOTALL | re.IGNORECASE,
+    )
+    m = proc_re.search(source)
+    if not m:
+        return []
+
+    body = m.group(1)
+    moves: list[dict] = []
+
+    for mm in _MOVE_RE.finditer(body):
+        line_start = body.rfind('\n', 0, mm.start()) + 1
+        if body[line_start:mm.start()].lstrip().startswith('!'):
+            continue
+
+        instr = mm.group(1).upper()               # 'MOVEL', 'MOVEJ', 'MOVEC'
+        raw_args = mm.group(2).strip()
+        args = _split_rapid_args(raw_args)
+        positional = [a for a in args if not a.lstrip().startswith("\\")]
+
+        if instr == "MOVEC":
+            # MoveC CirPoint, ToPoint, Speed, Zone, Tool [\WObj]
+            if len(positional) < 4:
+                continue
+            cir_point = positional[0].strip()
+            to_point  = positional[1].strip()
+            zone_str  = positional[3].strip()
+
+            if not _IDENT_RE.match(to_point):
+                continue
+
+            entry: dict = {
+                "target": to_point,
+                "move_type": "C",
+                "zone": _parse_zone(zone_str),
+            }
+            if _IDENT_RE.match(cir_point):
+                entry["via"] = cir_point
+            moves.append(entry)
+        else:
+            # MoveL / MoveJ  ToPoint, Speed, Zone, Tool [\WObj]
+            if len(positional) < 3:
+                continue
+            target   = positional[0].strip()
+            zone_str = positional[2].strip()
+
+            if not _IDENT_RE.match(target):
+                continue
+
+            moves.append({
+                "target": target,
+                "move_type": instr[-1],            # 'L' or 'J'
+                "zone": _parse_zone(zone_str),
+            })
+
+    return moves
+
 
 # ---------------------------------------------------------------------------
 # Console formatting helpers
@@ -711,12 +902,12 @@ def print_wobjdata(variables: list[RapidVariable]) -> None:
 # Monitor loop  (runs in a background daemon thread)
 # ---------------------------------------------------------------------------
 
-def monitor(client: RWSClient, poll_interval: float) -> None:
-    # Stores {name: value} of the previous poll so we detect value changes too
+def monitor(client: RWSClient, poll_interval: float, routine: str) -> None:
     known: dict[str, str] = {}
+    known_path: list[dict] = []
     first_run = True
 
-    print(f"\nMonitoring module '{client.module}' on task '{client.task}'.")
+    print(f"\nMonitoring module '{client.module}' on task '{client.task}', routine '{routine}'.")
     print(f"Polling every {poll_interval:.1f} s.  Press Ctrl+C to stop.\n")
 
     while True:
@@ -731,7 +922,11 @@ def monitor(client: RWSClient, poll_interval: float) -> None:
             n for n in current_names & known_names if current[n] != known[n]
         }
 
-        if first_run or new_names or removed_names or changed_names:
+        source = client.get_module_text()
+        path   = parse_routine_moves(source, routine) if source else []
+        path_changed = path != known_path
+
+        if first_run or new_names or removed_names or changed_names or path_changed:
             if not first_run:
                 if new_names:
                     print(f"\n[INFO] Robtarget(s) added:   {', '.join(sorted(new_names))}")
@@ -739,17 +934,28 @@ def monitor(client: RWSClient, poll_interval: float) -> None:
                     print(f"\n[INFO] Robtarget(s) removed: {', '.join(sorted(removed_names))}")
                 if changed_names:
                     print(f"\n[INFO] Robtarget(s) changed: {', '.join(sorted(changed_names))}")
+                if path_changed:
+                    targets_in_path = [s["target"] for s in path]
+                    print(f"\n[INFO] Path updated ({len(path)} moves): {' → '.join(targets_in_path)}")
 
             wobjdata = client.fetch_variables("wobjdata", symtyp="per")
             print_robtargets(robtargets)
             print_wobjdata(wobjdata)
 
+            if path:
+                print(f"\n  Path in '{routine}' ({len(path)} moves):")
+                for step in path:
+                    via = f"  via {step['via']}" if step.get('via') else ""
+                    print(f"    Move{step['move_type']} {step['target']:<25} zone={step['zone']}{via}")
+
             _broadcast({
                 "robtargets": [{"name": r.name, "value": r.value} for r in robtargets],
                 "wobjdata":   [{"name": w.name, "value": w.value} for w in wobjdata],
+                "path":       path,
             })
 
             known      = current
+            known_path = path
             first_run  = False
 
         time.sleep(poll_interval)
@@ -781,6 +987,7 @@ def main() -> None:
     print(f"  Module      : {cfg['module']}")
     print(f"  User        : {cfg['username']}")
     print(f"  RWS version : {'2.0' if rws_ver == 2 else '1.0'}")
+    print(f"  Routine     : {cfg['routine']}")
 
     if rws_ver == 2:
         client = RWS2Client(cfg)
@@ -798,7 +1005,7 @@ def main() -> None:
 
     # Start the robot monitor in a background thread
     t = threading.Thread(
-        target=monitor, args=(client, cfg["poll_interval"]), daemon=True
+        target=monitor, args=(client, cfg["poll_interval"], cfg["routine"]), daemon=True
     )
     t.start()
 

@@ -59,6 +59,7 @@ port         = 80              # RWS HTTP port (default 80)
 rws_version  = 1               # 1 for RWS 1.0, 2 for RWS 2.0
 task         = T_ROB1          # RAPID task name
 module       = MainModule      # RAPID module to monitor
+routine      = main            # RAPID routine to parse for path visualization
 poll_interval = 2.0            # Polling interval in seconds
 username     = Default User    # RWS login username
 password     = robotics        # RWS login password
@@ -73,6 +74,7 @@ https_port   = 5443            # Port for the HTTPS / WebXR server
 | `rws_version` | `1` | Robot Web Services version: `1` for RWS 1.0, `2` for RWS 2.0 |
 | `task` | `T_ROB1` | RAPID task name |
 | `module` | `MainModule` | RAPID module to monitor |
+| `routine` | `main` | RAPID routine to parse for MoveL/MoveJ path visualization |
 | `poll_interval` | `2.0` | Polling interval in seconds |
 | `username` | `Default User` | RWS login username |
 | `password` | `robotics` | RWS login password |
@@ -139,6 +141,29 @@ endpoints differ depending on the selected RWS version:
 
 RWS 2.0 requests include `Accept: application/xhtml+xml;v=2.0` and
 `Content-Type: application/x-www-form-urlencoded;v=2.0` headers.
+
+### Path visualization
+
+In addition to symbol data, the monitor downloads the RAPID module source
+file via the RWS File Service (`GET /fileservice/$HOME/<module>.mod`) on
+every poll cycle.  It parses the configured `routine` (default `main`) for
+`MoveL` and `MoveJ` instructions and extracts:
+
+- **Target name** — only declared (named) robtargets; inline values are
+  skipped.
+- **Move type** — `L` (linear) or `J` (joint).
+- **Zone value** — the path zone radius in mm (e.g. `z50` → 50 mm,
+  `fine` → 0 mm).
+
+Only robtargets that appear in a MoveL/MoveJ instruction inside the
+specified routine are shown on the 2-D canvas.  The path between targets
+is drawn as:
+
+- **Solid black line** for MoveL (linear motion).
+- **Dashed black line** for MoveJ (joint motion).
+- **Grey circle** around each target showing the zone radius.
+- **Smooth corner arc** within the zone circle at each intermediate
+  target, representing the blended corner path.
 
 ---
 

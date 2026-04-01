@@ -26,7 +26,7 @@
 'use strict';
 
 /* ─── Global state ────────────────────────────────────────────── */
-let robotData = { robtargets: [], wobjdata: [] };
+let robotData = { robtargets: [], wobjdata: [], path: [] };
 let settings  = { rotation: 0, vKeystone: 0, hKeystone: 0, zoomX: 100, zoomY: 100,
                   calMarks: false, calX: 500, calY: 500,
                   zFilterEnabled: false, zFilter: 20 };
@@ -171,6 +171,36 @@ function toCanvas(rx, ry, v) {
 }
 
 /* ─── Drawing helpers ─────────────────────────────────────────── */
+
+/**
+ * Append a circular arc from (ax,ay) through (bx,by) to (cx,cy) onto the
+ * current sub-path.  Falls back to straight line segments when the three
+ * points are (nearly) collinear.
+ */
+function arcThrough(ax, ay, bx, by, cx, cy) {
+  const D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+  if (Math.abs(D) < 0.5) {
+    ctx.lineTo(bx, by);
+    ctx.lineTo(cx, cy);
+    return;
+  }
+  const aa = ax*ax + ay*ay, bb = bx*bx + by*by, cc = cx*cx + cy*cy;
+  const ox = (aa*(by - cy) + bb*(cy - ay) + cc*(ay - by)) / D;
+  const oy = (aa*(cx - bx) + bb*(ax - cx) + cc*(bx - ax)) / D;
+  const r  = Math.hypot(ax - ox, ay - oy);
+
+  const angA = Math.atan2(ay - oy, ax - ox);
+  const angB = Math.atan2(by - oy, bx - ox);
+  const angC = Math.atan2(cy - oy, cx - ox);
+
+  const norm = a => ((a % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI);
+  const sweepToC = norm(angC - angA);
+  const sweepToB = norm(angB - angA);
+  const anticlockwise = sweepToB > sweepToC;
+
+  ctx.arc(ox, oy, r, angA, angC, anticlockwise);
+}
+
 function drawArrow(x0, y0, x1, y1, color, lw) {
   const dx = x1 - x0, dy = y1 - y0;
   const len = Math.hypot(dx, dy);
@@ -245,10 +275,10 @@ function draw() {
   ctx.fillStyle = 'white';
   ctx.fillRect(0, 0, W, H);
 
-  if (!view) return;   /* not yet initialised */
+  if (!view) return;
 
   const { scaleX, scaleY } = view;
-  const scaleAvg = Math.sqrt(scaleX * scaleY);   /* for uniform sizes (dots, font) */
+  const scaleAvg = Math.sqrt(scaleX * scaleY);
 
   const originAxisPxX = Math.max(55,  Math.min(160, 75  * scaleX));
   const originAxisPxY = Math.max(55,  Math.min(160, 75  * scaleY));
@@ -257,10 +287,7 @@ function draw() {
   const dotR          = Math.max(4,   Math.min(12,  5.5 * scaleAvg));
   const fontSize      = Math.round(Math.max(10, Math.min(16, 11.5 * scaleAvg)));
 
-  /* ── Rotate the canvas context around the wobj origin ─────────
-   * This rotates only the drawn coordinate system and targets.
-   * The canvas element's CSS keystone transform is unaffected.
-   */
+  /* ── Rotate around wobj origin ──────────────────────────────── */
   const org    = toCanvas(0, 0, view);
   const rotRad = settings.rotation * Math.PI / 180;
 
@@ -269,10 +296,120 @@ function draw() {
   ctx.rotate(rotRad);
   ctx.translate(-org.x, -org.y);
 
-  /* ── Wobj origin ──────────────────────────────────────────────
-   * Always drawn at view.ox / view.oy regardless of what targets exist.
-   * Dark red  = X-axis  |  Dark green = Y-axis
-   */
+  /* ── Build lookup: target name → parsed position ──────────── */
+  const targetMap = {};
+  for (const rt of robotData.robtargets) {
+    const p = parseRobtarget(rt.value);
+    if (p) targetMap[rt.name] = { parsed: p, raw: rt };
+  }
+
+  const path = robotData.path || [];
+  const pathNames = new Set(path.map(s => s.target));
+  for (const s of path) { if (s.via) pathNames.add(s.via); }
+
+  /* Resolve path steps to canvas positions */
+  const steps = [];
+  for (const s of path) {
+    const entry = targetMap[s.target];
+    if (!entry) continue;
+    const p = entry.parsed;
+    if (settings.zFilterEnabled && Math.abs(p.z) > settings.zFilter) continue;
+    const step = {
+      pos:  toCanvas(p.x, p.y, view),
+      zone: s.zone,
+      moveType: s.move_type,
+      name: s.target,
+      parsed: p,
+    };
+    if (s.via && targetMap[s.via]) {
+      const vp = targetMap[s.via].parsed;
+      step.via = { pos: toCanvas(vp.x, vp.y, view), name: s.via, parsed: vp };
+    }
+    steps.push(step);
+  }
+
+  /* ── Zone circles (background layer) ────────────────────────── */
+  for (const st of steps) {
+    if (st.zone <= 0) continue;
+    const zrX = st.zone * scaleX;
+    const zrY = st.zone * scaleY;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(160,160,160,0.45)';
+    ctx.fillStyle   = 'rgba(200,200,200,0.12)';
+    ctx.lineWidth   = 1;
+    ctx.beginPath();
+    ctx.ellipse(st.pos.x, st.pos.y, zrX, zrY, 0, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /* ── Path lines + corner arcs ───────────────────────────────── */
+  for (let i = 0; i < steps.length - 1; i++) {
+    const A = steps[i], B = steps[i + 1];
+
+    ctx.save();
+    ctx.strokeStyle = '#111';
+    ctx.lineWidth   = 1.5;
+    ctx.lineCap     = 'round';
+    if (B.moveType === 'J') ctx.setLineDash([8, 6]);
+
+    if (B.moveType === 'C' && B.via) {
+      /* Circular arc from A through CirPoint to B (solid) */
+      ctx.beginPath();
+      ctx.moveTo(A.pos.x, A.pos.y);
+      arcThrough(A.pos.x, A.pos.y, B.via.pos.x, B.via.pos.y, B.pos.x, B.pos.y);
+      ctx.stroke();
+    } else {
+      /* Straight segment with zone clipping */
+      const dx = B.pos.x - A.pos.x, dy = B.pos.y - A.pos.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist >= 1) {
+        const ux = dx / dist, uy = dy / dist;
+        const zrA = A.zone * scaleAvg;
+        const zrB = B.zone * scaleAvg;
+        const remaining = dist - zrA - zrB;
+        if (remaining > 0) {
+          ctx.beginPath();
+          ctx.moveTo(A.pos.x + ux * zrA, A.pos.y + uy * zrA);
+          ctx.lineTo(B.pos.x - ux * zrB, B.pos.y - uy * zrB);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  /* Corner arcs inside zone circles (only between straight segments) */
+  for (let i = 1; i < steps.length - 1; i++) {
+    const prev = steps[i - 1], curr = steps[i], next = steps[i + 1];
+    if (curr.zone <= 0) continue;
+    if (curr.moveType === 'C' || next.moveType === 'C') continue;
+    const zr = curr.zone * scaleAvg;
+
+    const dx1 = prev.pos.x - curr.pos.x, dy1 = prev.pos.y - curr.pos.y;
+    const len1 = Math.hypot(dx1, dy1);
+    const dx2 = next.pos.x - curr.pos.x, dy2 = next.pos.y - curr.pos.y;
+    const len2 = Math.hypot(dx2, dy2);
+    if (len1 < 1 || len2 < 1) continue;
+
+    const inX  = curr.pos.x + (dx1 / len1) * zr;
+    const inY  = curr.pos.y + (dy1 / len1) * zr;
+    const outX = curr.pos.x + (dx2 / len2) * zr;
+    const outY = curr.pos.y + (dy2 / len2) * zr;
+
+    ctx.save();
+    ctx.strokeStyle = '#111';
+    ctx.lineWidth   = 1.5;
+    ctx.lineCap     = 'round';
+    ctx.beginPath();
+    ctx.moveTo(inX, inY);
+    ctx.quadraticCurveTo(curr.pos.x, curr.pos.y, outX, outY);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /* ── Wobj origin ──────────────────────────────────────────────── */
   const wobjName = robotData.wobjdata.length > 0 ? robotData.wobjdata[0].name : '';
 
   drawArrow(org.x, org.y, org.x + originAxisPxX, org.y,                 '#8B0000', 3.5);
@@ -289,30 +426,31 @@ function draw() {
     ctx.fillText(wobjName, org.x + 8, org.y + 20);
   }
 
-  /* ── Robtargets ───────────────────────────────────────────────
-   * Visibility culling is skipped: pre-rotation pixel coordinates are not
-   * reliable for screen-space clipping when rotation is active.
-   * Red   = tool X-axis  |  Green = tool Y-axis
-   */
-  for (const rt of robotData.robtargets) {
-    const p = parseRobtarget(rt.value);
-    if (!p) continue;
+  /* ── Robtargets (path targets + via/CirPoint targets) ────────── */
+  const allDrawPts = [];
+  const drawnNames = new Set();
+  for (const st of steps) {
+    if (!drawnNames.has(st.name)) {
+      allDrawPts.push({ pos: st.pos, parsed: st.parsed, name: st.name });
+      drawnNames.add(st.name);
+    }
+    if (st.via && !drawnNames.has(st.via.name)) {
+      allDrawPts.push({ pos: st.via.pos, parsed: st.via.parsed, name: st.via.name });
+      drawnNames.add(st.via.name);
+    }
+  }
 
-    /* Z-filter: skip targets whose Z is outside [-zFilter, +zFilter] */
-    if (settings.zFilterEnabled && Math.abs(p.z) > settings.zFilter) continue;
+  for (const pt of allDrawPts) {
+    const p   = pt.parsed;
+    const pos = pt.pos;
 
-    const pos = toCanvas(p.x, p.y, view);
+    const axes       = quatAxes2D(p.qw, p.qx, p.qy, p.qz);
+    const [xaX, xaY] = axes.xAxis;
+    const [yaX, yaY] = axes.yAxis;
 
-    const axes        = quatAxes2D(p.qw, p.qx, p.qy, p.qz);
-    const [xaX, xaY]  = axes.xAxis;
-    const [yaX, yaY]  = axes.yAxis;
-
-    /* Scale each direction component by its own axis scale so arrows
-       correctly reflect the (potentially non-uniform) coordinate space. */
     drawArrow(pos.x, pos.y,
       pos.x + xaX * targetAxisPxX, pos.y - xaY * targetAxisPxY,
       '#E82020', 1.8);
-
     drawArrow(pos.x, pos.y,
       pos.x + yaX * targetAxisPxX, pos.y - yaY * targetAxisPxY,
       '#00AA00', 1.8);
@@ -324,13 +462,10 @@ function draw() {
 
     ctx.font      = `${fontSize}px monospace`;
     ctx.fillStyle = '#111';
-    ctx.fillText(rt.name, pos.x + dotR + 4, pos.y - dotR - 3);
+    ctx.fillText(pt.name, pos.x + dotR + 4, pos.y - dotR - 3);
   }
 
-  /* ── Calibration marks ─────────────────────────────────────────
-   * X-axis mark: at robot position (calX, 0)
-   * Y-axis mark: at robot position (0, calY)
-   */
+  /* ── Calibration marks ──────────────────────────────────────── */
   if (settings.calMarks) {
     const mX = toCanvas(settings.calX, 0, view);
     drawCalMark(mX.x, mX.y, `X = ${settings.calX} mm`, true);
@@ -338,10 +473,10 @@ function draw() {
     drawCalMark(mY.x, mY.y, `Y = ${settings.calY} mm`, false);
   }
 
-  ctx.restore();   /* end of rotated coordinate system */
+  ctx.restore();   /* end of rotated context */
 
-  /* ── Idle hint (fixed screen position, outside rotation) ──── */
-  if (robotData.robtargets.length === 0) {
+  /* ── Idle hint (outside rotation) ───────────────────────────── */
+  if (steps.length === 0 && robotData.robtargets.length === 0) {
     ctx.save();
     ctx.font      = '18px monospace';
     ctx.fillStyle = '#aaa';
@@ -396,8 +531,14 @@ function connectSSE() {
   const src = new EventSource('/events');
   src.onmessage = e => {
     robotData = JSON.parse(e.data);
-    /* Initialise the view the first time we receive targets */
-    if (view === null) initView(robotData.robtargets);
+    if (!robotData.path) robotData.path = [];
+    if (view === null) {
+      const pathNames = new Set(robotData.path.map(p => p.target));
+      const targets = pathNames.size > 0
+        ? robotData.robtargets.filter(r => pathNames.has(r.name))
+        : robotData.robtargets;
+      initView(targets);
+    }
     draw();
   };
   src.onerror = () => console.warn('SSE disconnected – reconnecting…');
