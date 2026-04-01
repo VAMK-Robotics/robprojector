@@ -725,39 +725,43 @@ class RWS2Client(RWSClient):
         return "<unavailable>"
 
     def get_module_text(self) -> str:
-        """RWS 2.0 override — save POST needs Content-Type with v=2.0."""
-        save_url = f"{self.base_url}/rw/rapid/modules/{self.module}"
-        try:
-            resp = self.session.post(
-                save_url,
-                params={"task": self.task, "action": "save"},
-                data=urlencode([("name", self.module), ("path", "$TEMP")]),
-                headers={"Content-Type": "application/x-www-form-urlencoded;v=2.0"},
-                timeout=15,
-            )
-            if resp.status_code not in (200, 204):
-                print(f"[ERROR] HTTP {resp.status_code} saving module – {save_url}",
-                      file=sys.stderr)
-                return ""
-        except requests.ConnectionError:
-            print(f"[ERROR] Cannot connect to {self.base_url}", file=sys.stderr)
-            return ""
-        except requests.Timeout:
-            print(f"[ERROR] Timeout saving module – {save_url}", file=sys.stderr)
+        """RWS 2.0: GET /rw/rapid/tasks/{task}/modules/{module}/text
+        returns the source directly in the XML response.
+        For large modules the controller returns a file-path instead."""
+        root = self._get(
+            f"/rw/rapid/tasks/{self.task}/modules/{self.module}/text"
+        )
+        if root is None:
             return ""
 
-        dl_url = f"{self.base_url}/fileservice/$TEMP/{self.module}.mod"
-        try:
-            resp = self.session.get(dl_url, headers={"Accept": "*/*"}, timeout=15)
-            resp.raise_for_status()
-            return resp.text
-        except requests.HTTPError:
-            print(f"[ERROR] HTTP {resp.status_code} downloading module – {dl_url}",
-                  file=sys.stderr)
-        except requests.ConnectionError:
-            print(f"[ERROR] Cannot connect to {self.base_url}", file=sys.stderr)
-        except requests.Timeout:
-            print(f"[ERROR] Timeout downloading module – {dl_url}", file=sys.stderr)
+        text = ""
+        file_path = ""
+        for span in root.iter(f"{{{XHTML_NS}}}span"):
+            cls = span.get("class", "")
+            if cls == "module-text":
+                text = (span.text or "").strip()
+            elif cls == "file-path":
+                file_path = (span.text or "").strip()
+
+        if text:
+            return text
+
+        if file_path:
+            dl_url = f"{self.base_url}/fileservice/{file_path}"
+            try:
+                resp = self.session.get(
+                    dl_url, headers={"Accept": "*/*"}, timeout=15)
+                resp.raise_for_status()
+                return resp.text
+            except (requests.HTTPError, requests.ConnectionError,
+                    requests.Timeout) as exc:
+                print(f"[ERROR] Downloading module text: {exc}",
+                      file=sys.stderr)
+                return ""
+
+        raw = ET.tostring(root, encoding="unicode")
+        print(f"[DEBUG] RWS2 module/text response (no module-text or "
+              f"file-path found):\n{raw[:1000]}", file=sys.stderr)
         return ""
 
 
