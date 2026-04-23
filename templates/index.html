@@ -426,17 +426,27 @@ function draw() {
     ctx.fillText(wobjName, org.x + 8, org.y + 20);
   }
 
-  /* ── Robtargets (path targets + via/CirPoint targets) ────────── */
+  /* ── Robtargets ─────────────────────────────────────────────── */
   const allDrawPts = [];
   const drawnNames = new Set();
-  for (const st of steps) {
-    if (!drawnNames.has(st.name)) {
-      allDrawPts.push({ pos: st.pos, parsed: st.parsed, name: st.name });
-      drawnNames.add(st.name);
+  if (steps.length > 0) {
+    /* Path mode: only targets referenced by Move instructions */
+    for (const st of steps) {
+      if (!drawnNames.has(st.name)) {
+        allDrawPts.push({ pos: st.pos, parsed: st.parsed, name: st.name });
+        drawnNames.add(st.name);
+      }
+      if (st.via && !drawnNames.has(st.via.name)) {
+        allDrawPts.push({ pos: st.via.pos, parsed: st.via.parsed, name: st.via.name });
+        drawnNames.add(st.via.name);
+      }
     }
-    if (st.via && !drawnNames.has(st.via.name)) {
-      allDrawPts.push({ pos: st.via.pos, parsed: st.via.parsed, name: st.via.name });
-      drawnNames.add(st.via.name);
+  } else {
+    /* No path: draw all robtargets */
+    for (const [name, entry] of Object.entries(targetMap)) {
+      const p = entry.parsed;
+      if (settings.zFilterEnabled && Math.abs(p.z) > settings.zFilter) continue;
+      allDrawPts.push({ pos: toCanvas(p.x, p.y, view), parsed: p, name });
     }
   }
 

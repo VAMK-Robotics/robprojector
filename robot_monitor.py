@@ -519,11 +519,93 @@ class RWSClient:
     # Module source download (save to $TEMP, then fetch via File Service)
     # ------------------------------------------------------------------
 
-    def get_module_text(self) -> str:
-        """Save the active module to $TEMP via the RAPID save endpoint,
-        then download the file via the RWS File Service."""
-        save_url = f"{self.base_url}/rw/rapid/modules/{self.module}"
+    # ------------------------------------------------------------------
+    # Module source download (mastership + RMMP for manual mode)
+    # ------------------------------------------------------------------
+
+    _FORM_CT = {"Content-Type": "application/x-www-form-urlencoded"}
+    _rmmp_held: bool = False
+
+    def _request_mastership(self) -> bool:
+        url = f"{self.base_url}/rw/mastership"
         try:
+            resp = self.session.post(
+                url, params={"action": "request"},
+                data="", headers=self._FORM_CT, timeout=10)
+            return resp.status_code in (200, 204)
+        except (requests.ConnectionError, requests.Timeout):
+            return False
+
+    def _release_mastership(self) -> None:
+        url = f"{self.base_url}/rw/mastership"
+        try:
+            self.session.post(
+                url, params={"action": "release"},
+                data="", headers=self._FORM_CT, timeout=10)
+        except (requests.ConnectionError, requests.Timeout):
+            pass
+
+    def _request_rmmp(self) -> bool:
+        """Request RMMP and wait up to 30 s for the operator to accept."""
+        url = f"{self.base_url}/users/rmmp"
+        try:
+            resp = self.session.post(
+                url, data="privilege=modify",
+                headers=self._FORM_CT, timeout=10)
+            if resp.status_code != 202:
+                return False
+        except (requests.ConnectionError, requests.Timeout):
+            return False
+
+        print("\n[INFO] Manual mode detected – please accept RMMP "
+              "on the FlexPendant…")
+
+        for _ in range(15):
+            time.sleep(2)
+            try:
+                self.session.get(
+                    f"{self.base_url}/users/rmmp/poll", timeout=10)
+            except (requests.ConnectionError, requests.Timeout):
+                pass
+            if self._request_mastership():
+                self._release_mastership()
+                self._rmmp_held = True
+                print("[INFO] RMMP granted – manual mode mastership OK.")
+                return True
+
+        print("[WARN] RMMP not accepted within 30 s.", file=sys.stderr)
+        return False
+
+    def _poll_rmmp(self) -> None:
+        """Keep an active RMMP alive."""
+        try:
+            self.session.get(
+                f"{self.base_url}/users/rmmp/poll", timeout=10)
+        except (requests.ConnectionError, requests.Timeout):
+            self._rmmp_held = False
+
+    def _cancel_rmmp(self) -> None:
+        try:
+            self.session.post(
+                f"{self.base_url}/users/rmmp",
+                params={"action": "cancel"},
+                data="", headers=self._FORM_CT, timeout=10)
+        except (requests.ConnectionError, requests.Timeout):
+            pass
+        self._rmmp_held = False
+
+    def _save_module(self) -> str:
+        """Acquire mastership, save module to $TEMP, release, download."""
+        if not self._request_mastership():
+            if not self._rmmp_held:
+                if not self._request_rmmp():
+                    return ""
+            if not self._request_mastership():
+                print("[WARN] Cannot acquire mastership.", file=sys.stderr)
+                return ""
+
+        try:
+            save_url = f"{self.base_url}/rw/rapid/modules/{self.module}"
             resp = self.session.post(
                 save_url,
                 params={"task": self.task, "action": "save"},
@@ -531,29 +613,34 @@ class RWSClient:
                 timeout=15,
             )
             if resp.status_code not in (200, 204):
-                print(f"[ERROR] HTTP {resp.status_code} saving module – {save_url}",
-                      file=sys.stderr)
+                print(f"[ERROR] HTTP {resp.status_code} saving module – "
+                      f"{save_url}", file=sys.stderr)
                 return ""
-        except requests.ConnectionError:
-            print(f"[ERROR] Cannot connect to {self.base_url}", file=sys.stderr)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            print(f"[ERROR] Saving module failed: {exc}", file=sys.stderr)
             return ""
-        except requests.Timeout:
-            print(f"[ERROR] Timeout saving module – {save_url}", file=sys.stderr)
-            return ""
+        finally:
+            self._release_mastership()
 
         dl_url = f"{self.base_url}/fileservice/$TEMP/{self.module}.mod"
         try:
-            resp = self.session.get(dl_url, headers={"Accept": "*/*"}, timeout=15)
+            resp = self.session.get(
+                dl_url, headers={"Accept": "*/*"}, timeout=15)
             resp.raise_for_status()
             return resp.text
         except requests.HTTPError:
-            print(f"[ERROR] HTTP {resp.status_code} downloading module – {dl_url}",
+            print(f"[ERROR] HTTP {resp.status_code} downloading module – "
+                  f"{dl_url}", file=sys.stderr)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            print(f"[ERROR] Downloading module failed: {exc}",
                   file=sys.stderr)
-        except requests.ConnectionError:
-            print(f"[ERROR] Cannot connect to {self.base_url}", file=sys.stderr)
-        except requests.Timeout:
-            print(f"[ERROR] Timeout downloading module – {dl_url}", file=sys.stderr)
         return ""
+
+    def get_module_text(self) -> str:
+        """Get the current in-memory RAPID module source."""
+        if self._rmmp_held:
+            self._poll_rmmp()
+        return self._save_module()
 
 
 # ---------------------------------------------------------------------------
@@ -926,9 +1013,13 @@ def monitor(client: RWSClient, poll_interval: float, routine: str) -> None:
             n for n in current_names & known_names if current[n] != known[n]
         }
 
-        source = client.get_module_text()
-        path   = parse_routine_moves(source, routine) if source else []
-        path_changed = path != known_path
+        # Path parsing is disabled for now (no module read / mastership).
+        # To re-enable, uncomment the block below.
+        # source = client.get_module_text()
+        # path   = parse_routine_moves(source, routine) if source else []
+        # path_changed = path != known_path
+        path: list[dict] = []
+        path_changed = False
 
         if first_run or new_names or removed_names or changed_names or path_changed:
             if not first_run:
@@ -938,19 +1029,10 @@ def monitor(client: RWSClient, poll_interval: float, routine: str) -> None:
                     print(f"\n[INFO] Robtarget(s) removed: {', '.join(sorted(removed_names))}")
                 if changed_names:
                     print(f"\n[INFO] Robtarget(s) changed: {', '.join(sorted(changed_names))}")
-                if path_changed:
-                    targets_in_path = [s["target"] for s in path]
-                    print(f"\n[INFO] Path updated ({len(path)} moves): {' → '.join(targets_in_path)}")
 
             wobjdata = client.fetch_variables("wobjdata", symtyp="per")
             print_robtargets(robtargets)
             print_wobjdata(wobjdata)
-
-            if path:
-                print(f"\n  Path in '{routine}' ({len(path)} moves):")
-                for step in path:
-                    via = f"  via {step['via']}" if step.get('via') else ""
-                    print(f"    Move{step['move_type']} {step['target']:<25} zone={step['zone']}{via}")
 
             _broadcast({
                 "robtargets": [{"name": r.name, "value": r.value} for r in robtargets],
