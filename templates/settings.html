@@ -106,6 +106,10 @@
     input[type=range].blue-thumb::-webkit-slider-thumb:hover {
       box-shadow: 0 0 0 5px rgba(68,136,238,0.22);
     }
+    input[type=range].green-thumb::-webkit-slider-thumb { background: var(--green); }
+    input[type=range].green-thumb::-webkit-slider-thumb:hover {
+      box-shadow: 0 0 0 5px rgba(64,192,112,0.22);
+    }
 
     input[type=number] {
       width: 86px;
@@ -124,13 +128,15 @@
       -moz-appearance: textfield;
     }
 
-    input[type=number].blue { color: var(--blue); }
+    input[type=number].blue  { color: var(--blue);  }
+    input[type=number].green { color: var(--green); }
 
     input[type=number]::-webkit-inner-spin-button,
     input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
 
-    input[type=number]:focus { border-color: var(--highlight); }
-    input[type=number].blue:focus { border-color: var(--blue); }
+    input[type=number]:focus       { border-color: var(--highlight); }
+    input[type=number].blue:focus  { border-color: var(--blue);  }
+    input[type=number].green:focus { border-color: var(--green); }
 
     .unit {
       color: var(--muted);
@@ -235,11 +241,76 @@
 
     .link-row a { color: var(--green); text-decoration: none; }
     .link-row a:hover { text-decoration: underline; }
+
+    /* ── Pan / position d-pad ─────────────────────────────────── */
+    .pan-section {
+      display: flex;
+      align-items: flex-start;
+      gap: 1.5rem;
+      margin-bottom: 1.6rem;
+      flex-wrap: wrap;
+    }
+
+    .pan-step-col {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      min-width: 110px;
+    }
+
+    .pan-step-col .control-name { margin-bottom: 0.3rem; }
+
+    .pan-step-input {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .pan-pad {
+      display: grid;
+      grid-template-columns: repeat(3, 44px);
+      grid-template-rows: repeat(3, 44px);
+      gap: 0.35rem;
+    }
+
+    .pan-btn {
+      flex: none;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--track);
+      color: var(--text);
+      font-size: 1.15rem;
+      cursor: pointer;
+      transition: opacity 0.12s, transform 0.1s, background 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .pan-btn:hover  { opacity: 0.88; background: var(--accent); }
+    .pan-btn:active { transform: scale(0.90); }
+
+    .pan-btn.pan-reset { font-size: 0.95rem; color: var(--muted); }
+    .pan-btn.pan-empty { visibility: hidden; pointer-events: none; }
+
+    /* Save-status badge */
+    .save-badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      color: var(--green);
+      opacity: 0;
+      margin-left: 0.8rem;
+      transition: opacity 0.3s;
+    }
+    .save-badge.visible { opacity: 1; }
   </style>
 </head>
 <body>
 
-<h1>Projector Settings</h1>
+<h1>Projector Settings <span class="save-badge" id="saveBadge">✔ saved</span></h1>
 
 <div class="card">
 
@@ -288,6 +359,58 @@
       <input type="range"  data-key="zoomY" min="10" max="500" step="0.1" value="100">
       <input type="number" data-key="zoomY" min="10" max="500" step="0.1" value="100">
       <span class="unit">%</span>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ── Position Adjustment ─────────────────────────────────── -->
+  <p class="section-label">Position Adjustment</p>
+
+  <div class="pan-section">
+    <!-- Step size input -->
+    <div class="pan-step-col">
+      <span class="control-name">Step size</span>
+      <div class="pan-step-input">
+        <input type="number" id="panStep" min="0.01" max="9999" step="0.01" value="1"
+               style="width:76px;" class="green">
+        <span class="unit">mm</span>
+      </div>
+    </div>
+
+    <!-- D-pad -->
+    <div>
+      <div class="pan-pad">
+        <span class="pan-btn pan-empty"></span>
+        <button class="pan-btn" onclick="pan(0,1)"  title="Move up (+Y)">↑</button>
+        <span class="pan-btn pan-empty"></span>
+
+        <button class="pan-btn" onclick="pan(-1,0)" title="Move left (−X)">←</button>
+        <span   class="pan-btn pan-empty"></span>
+        <button class="pan-btn" onclick="pan(1,0)"  title="Move right (+X)">→</button>
+
+        <span class="pan-btn pan-empty"></span>
+        <button class="pan-btn" onclick="pan(0,-1)" title="Move down (−Y)">↓</button>
+        <span class="pan-btn pan-empty"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="control">
+    <span class="control-name">X Offset</span>
+    <div class="input-row">
+      <input type="range"  data-key="offsetX" class="green-thumb" min="-2000" max="2000" step="0.1" value="0">
+      <input type="number" data-key="offsetX" class="green" min="-99999" max="99999" step="0.1" value="0">
+      <span class="unit">mm</span>
+    </div>
+  </div>
+
+  <div class="control">
+    <span class="control-name">Y Offset</span>
+    <div class="input-row">
+      <input type="range"  data-key="offsetY" class="green-thumb" min="-2000" max="2000" step="0.1" value="0">
+      <input type="number" data-key="offsetY" class="green" min="-99999" max="99999" step="0.1" value="0">
+      <span class="unit">mm</span>
     </div>
   </div>
 
@@ -362,7 +485,8 @@
   </div>
 
   <p class="link-row">
-    Display window:&nbsp;<a href="/" target="_blank">http://localhost/</a>
+    <a href="/home">Home</a> &nbsp;·&nbsp;
+    <a href="/" target="_blank">Display</a>
   </p>
 
 </div>
@@ -378,6 +502,8 @@ const DEFAULTS = {
   hKeystone:       0,
   zoomX:           100,
   zoomY:           100,
+  offsetX:         0,
+  offsetY:         0,
   calMarks:        false,
   calX:            500,
   calY:            500,
@@ -386,46 +512,62 @@ const DEFAULTS = {
 };
 
 /* ── Collect paired range+number inputs ─────────────────────────── */
-const sliders = {};   /* key → { range, num } for numeric controls */
+const sliders = {};
 
-const NUMERIC_KEYS = ['rotation', 'vKeystone', 'hKeystone', 'zoomX', 'zoomY', 'calX', 'calY', 'zFilter'];
+const NUMERIC_KEYS = [
+  'rotation', 'vKeystone', 'hKeystone', 'zoomX', 'zoomY',
+  'offsetX', 'offsetY',
+  'calX', 'calY', 'zFilter',
+];
 for (const key of NUMERIC_KEYS) {
-  const els  = document.querySelectorAll(`[data-key="${key}"]`);
+  const els = document.querySelectorAll(`[data-key="${key}"]`);
   sliders[key] = {
     range: [...els].find(e => e.type === 'range'),
     num:   [...els].find(e => e.type === 'number'),
   };
 }
 
+const panStepEl       = document.getElementById('panStep');
 const calMarksEl      = document.getElementById('calMarks');
 const calFieldsEl     = document.getElementById('cal-fields');
 const zFilterEl       = document.getElementById('zFilterEnabled');
 const zFilterFieldsEl = document.getElementById('zf-fields');
+const saveBadgeEl     = document.getElementById('saveBadge');
 
 /* ── Sync range ↔ number and persist ───────────────────────────── */
 for (const [key, { range, num }] of Object.entries(sliders)) {
-  range.addEventListener('input', () => {
-    num.value = range.value;
-    saveSettings();
-  });
+  if (range) {
+    range.addEventListener('input', () => {
+      num.value = range.value;
+      saveSettings();
+    });
+  }
 
   num.addEventListener('input', () => {
     const v = parseFloat(num.value);
     if (isNaN(v)) return;
-    /* Clamp range slider but allow number input to exceed slider range */
-    const clamped = Math.max(parseFloat(range.min), Math.min(parseFloat(range.max), v));
-    range.value = clamped;
+    if (range) {
+      range.value = Math.max(parseFloat(range.min), Math.min(parseFloat(range.max), v));
+    }
     saveSettings();
   });
 
   num.addEventListener('change', () => {
     let v = parseFloat(num.value);
-    if (isNaN(v)) { num.value = DEFAULTS[key]; v = DEFAULTS[key]; }
-    const clamped = Math.max(parseFloat(range.min), Math.min(parseFloat(range.max), v));
-    range.value = clamped;
+    if (isNaN(v)) { num.value = DEFAULTS[key] ?? 0; v = DEFAULTS[key] ?? 0; }
+    if (range) {
+      range.value = Math.max(parseFloat(range.min), Math.min(parseFloat(range.max), v));
+    }
     saveSettings();
   });
 }
+
+panStepEl.addEventListener('input',  saveSettings);
+panStepEl.addEventListener('change', () => {
+  let v = parseFloat(panStepEl.value);
+  if (isNaN(v) || v <= 0) { panStepEl.value = 1; }
+  saveSettings();
+});
 
 /* ── Toggles ────────────────────────────────────────────────────── */
 function updateCalFieldsState() {
@@ -436,21 +578,15 @@ function updateZFilterFieldsState() {
   zFilterFieldsEl.classList.toggle('disabled', !zFilterEl.checked);
 }
 
-calMarksEl.addEventListener('change', () => {
-  updateCalFieldsState();
-  saveSettings();
-});
-
-zFilterEl.addEventListener('change', () => {
-  updateZFilterFieldsState();
-  saveSettings();
-});
+calMarksEl.addEventListener('change', () => { updateCalFieldsState();   saveSettings(); });
+zFilterEl .addEventListener('change', () => { updateZFilterFieldsState(); saveSettings(); });
 
 /* ── Read current settings ──────────────────────────────────────── */
 function getSettings() {
   const s = {
     calMarks:       calMarksEl.checked,
     zFilterEnabled: zFilterEl.checked,
+    panStep:        parseFloat(panStepEl.value) || 1,
   };
   for (const [key, { num }] of Object.entries(sliders)) {
     s[key] = parseFloat(num.value);
@@ -462,34 +598,103 @@ function getSettings() {
 function setSettings(saved) {
   for (const [key, { range, num }] of Object.entries(sliders)) {
     if (saved[key] !== undefined) {
-      num.value   = saved[key];
-      const clamped = Math.max(parseFloat(range.min), Math.min(parseFloat(range.max), saved[key]));
-      range.value = clamped;
+      num.value = saved[key];
+      if (range) {
+        range.value = Math.max(parseFloat(range.min), Math.min(parseFloat(range.max), saved[key]));
+      }
     }
   }
+  if (saved.panStep        !== undefined) panStepEl.value    = saved.panStep;
   if (saved.calMarks       !== undefined) calMarksEl.checked = !!saved.calMarks;
   if (saved.zFilterEnabled !== undefined) zFilterEl .checked = !!saved.zFilterEnabled;
   updateCalFieldsState();
   updateZFilterFieldsState();
 }
 
+/* ── Save badge flash ───────────────────────────────────────────── */
+let _badgeTimer = null;
+function flashSaveBadge() {
+  saveBadgeEl.classList.add('visible');
+  clearTimeout(_badgeTimer);
+  _badgeTimer = setTimeout(() => saveBadgeEl.classList.remove('visible'), 1800);
+}
+
 /* ── Persist ────────────────────────────────────────────────────── */
+let _serverSaveTimer = null;
+
 function saveSettings() {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(getSettings()));
+  const s = getSettings();
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+
+  /* Debounced server save (500 ms after last change) */
+  clearTimeout(_serverSaveTimer);
+  _serverSaveTimer = setTimeout(() => _saveToServer(s), 500);
+}
+
+async function _saveToServer(s) {
+  try {
+    const resp = await fetch('/api/projector-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(s),
+    });
+    if (resp.ok) flashSaveBadge();
+  } catch (_) { /* silently ignore network errors */ }
+}
+
+/* ── Pan helpers ────────────────────────────────────────────────── */
+function pan(dx, dy) {
+  const step = parseFloat(panStepEl.value) || 1;
+  const { range: rx, num: nx } = sliders.offsetX;
+  const { range: ry, num: ny } = sliders.offsetY;
+
+  const newX = (parseFloat(nx.value) || 0) + dx * step;
+  const newY = (parseFloat(ny.value) || 0) + dy * step;
+
+  nx.value = +newX.toFixed(4);
+  rx.value = Math.max(parseFloat(rx.min), Math.min(parseFloat(rx.max), newX));
+  ny.value = +newY.toFixed(4);
+  ry.value = Math.max(parseFloat(ry.min), Math.min(parseFloat(ry.max), newY));
+
+  saveSettings();
 }
 
 /* ── Reset ──────────────────────────────────────────────────────── */
 function resetAll() {
   setSettings(DEFAULTS);
+  panStepEl.value = 1;
   saveSettings();
 }
 
 /* ── Load on startup ────────────────────────────────────────────── */
-(function loadSettings() {
+(async function initSettings() {
+  /* 1. Try server (authoritative, file-backed) */
+  try {
+    const resp = await fetch('/api/projector-settings');
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && Object.keys(data).length > 0 && !data.error) {
+        setSettings(Object.assign({}, DEFAULTS, data));
+        /* Mirror into localStorage so the display window picks it up */
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(getSettings()));
+        return;
+      }
+    }
+  } catch (_) {}
+
+  /* 2. Fall back to localStorage (migration from previous install or offline) */
   try {
     const s = localStorage.getItem(SETTINGS_KEY);
-    if (s) setSettings(JSON.parse(s));
+    if (s) {
+      const parsed = JSON.parse(s);
+      setSettings(Object.assign({}, DEFAULTS, parsed));
+      /* Persist the migrated data to the server file */
+      _saveToServer(getSettings());
+      return;
+    }
   } catch (_) {}
+
+  /* 3. Nothing stored – use DEFAULTS (already applied by HTML attribute values) */
   updateCalFieldsState();
   updateZFilterFieldsState();
 })();

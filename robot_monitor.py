@@ -35,7 +35,7 @@ from urllib.parse import urlencode
 
 import requests
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
-from flask import Flask, Response, render_template, jsonify
+from flask import Flask, Response, render_template, jsonify, request
 from werkzeug.serving import make_server
 
 # Suppress per-request werkzeug logs (Flask already silences its own logger below)
@@ -45,8 +45,9 @@ logging.getLogger("werkzeug").setLevel(logging.ERROR)
 # Constants
 # ---------------------------------------------------------------------------
 
-XHTML_NS     = "http://www.w3.org/1999/xhtml"
-CONFIG_PATH  = "config.ini"
+XHTML_NS      = "http://www.w3.org/1999/xhtml"
+CONFIG_PATH   = "config.ini"
+SETTINGS_FILE = "projector_settings.json"
 THREE_VERSION = "0.168.0"
 CERT_FILE     = "cert.pem"
 KEY_FILE      = "key.pem"
@@ -140,6 +141,79 @@ def api_server_info():
         "https_port": _cfg_cache.get("https_port", 5443),
         "web_port":   _cfg_cache.get("web_port",   5000),
     })
+
+
+@app.route("/api/projector-settings", methods=["GET"])
+def api_get_projector_settings():
+    """Read display settings from the JSON file on disk."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), SETTINGS_FILE)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except FileNotFoundError:
+        return jsonify({})          # fresh install – client falls back to defaults
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/projector-settings", methods=["POST"])
+def api_save_projector_settings():
+    """Write display settings to the JSON file on disk."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), SETTINGS_FILE)
+    try:
+        data = request.get_json(force=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Expected JSON object"}), 400
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        return jsonify({"status": "ok"})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/robot-config", methods=["GET"])
+def api_get_robot_config():
+    """Return the active module and routine from the runtime config."""
+    return jsonify({
+        "module":  _cfg_cache.get("module",  "MainModule"),
+        "routine": _cfg_cache.get("routine", "main"),
+    })
+
+
+@app.route("/api/robot-config", methods=["POST"])
+def api_save_robot_config():
+    """Update module and routine at runtime and persist them to config.ini."""
+    try:
+        data = request.get_json(force=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Expected JSON object"}), 400
+
+        module  = str(data.get("module",  _cfg_cache.get("module",  "MainModule"))).strip()
+        routine = str(data.get("routine", _cfg_cache.get("routine", "main"))).strip()
+
+        if not module or not routine:
+            return jsonify({"error": "module and routine must be non-empty"}), 400
+
+        # Update runtime state immediately (next monitor poll picks it up).
+        _cfg_cache["module"]  = module
+        _cfg_cache["routine"] = routine
+        if _client is not None:
+            _client.module = module
+
+        # Persist to config.ini (preserves all other keys).
+        cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_PATH)
+        parser = configparser.ConfigParser()
+        parser.read(cfg_path)
+        if "robot" not in parser:
+            parser["robot"] = {}
+        parser["robot"]["module"]  = module
+        parser["robot"]["routine"] = routine
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            parser.write(f)
+
+        return jsonify({"status": "ok", "module": module, "routine": routine})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/path-status")

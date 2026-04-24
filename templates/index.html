@@ -28,6 +28,7 @@
 /* ─── Global state ────────────────────────────────────────────── */
 let robotData = { robtargets: [], wobjdata: [], path: [], path_visible: false };
 let settings  = { rotation: 0, vKeystone: 0, hKeystone: 0, zoomX: 100, zoomY: 100,
+                  offsetX: 0, offsetY: 0,
                   calMarks: false, calX: 500, calY: 500,
                   zFilterEnabled: false, zFilter: 20 };
 
@@ -47,10 +48,24 @@ let lastW = 0, lastH = 0;
 const canvas = document.getElementById('canvas');
 const ctx    = canvas.getContext('2d');
 
-/* ─── Settings (written by /settings via localStorage) ───────── */
+/* ─── Settings ────────────────────────────────────────────────── */
 const SETTINGS_KEY = 'projectorSettings';
 
-function loadSettings() {
+async function loadSettings() {
+  /* Primary: server JSON file (file-backed, survives localStorage clears) */
+  try {
+    const resp = await fetch('/api/projector-settings');
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && Object.keys(data).length > 0 && !data.error) {
+        settings = Object.assign(settings, data);
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+        applyTransform();
+        return;
+      }
+    }
+  } catch (_) {}
+  /* Fallback: localStorage (works offline / before first settings save) */
   try {
     const s = localStorage.getItem(SETTINGS_KEY);
     if (s) settings = Object.assign(settings, JSON.parse(s));
@@ -79,7 +94,7 @@ window.addEventListener('storage', e => {
   if (e.key === SETTINGS_KEY) {
     try { settings = JSON.parse(e.newValue); } catch (_) {}
     applyTransform();
-    applyZoom();
+    applyZoom();   /* applyZoom calls draw(), which re-evaluates offsetX/offsetY */
   }
 });
 
@@ -165,9 +180,12 @@ function quatAxes2D(qw, qx, qy, qz) {
   };
 }
 
-/* Robot mm → canvas px */
+/* Robot mm → canvas px  (offsetX / offsetY shift the entire coordinate frame) */
 function toCanvas(rx, ry, v) {
-  return { x: v.ox + rx * v.scaleX, y: v.oy - ry * v.scaleY };
+  return {
+    x: v.ox + (rx + (settings.offsetX || 0)) * v.scaleX,
+    y: v.oy - (ry + (settings.offsetY || 0)) * v.scaleY,
+  };
 }
 
 /* ─── Drawing helpers ─────────────────────────────────────────── */
@@ -543,9 +561,13 @@ function connectSSE() {
 }
 
 /* ─── Bootstrap ───────────────────────────────────────────────── */
-loadSettings();
-resize();       /* sets lastW/lastH, canvas size, and draws once */
-connectSSE();   /* initialises view on first data arrival */
+/* await loadSettings so the correct offsetX/offsetY are in place before
+   the first draw(), which happens inside resize(). */
+(async () => {
+  await loadSettings();
+  resize();
+  connectSSE();
+})();
 </script>
 </body>
 </html>

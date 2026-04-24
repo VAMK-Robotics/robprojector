@@ -202,6 +202,66 @@
     .nav-link-icon { font-size: 1.15rem; flex-shrink: 0; }
     .nav-link-label { flex: 1; }
     .nav-link-url   { font-size: 0.78rem; color: var(--muted); }
+
+    /* ── Module & Routine card ──────────────────────────────────── */
+    .field-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      margin-bottom: 1.3rem;
+    }
+
+    .field { display: flex; flex-direction: column; gap: 0.35rem; }
+
+    .field-label {
+      font-size: 0.82rem;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .field-input {
+      background: var(--track);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: 'Courier New', monospace;
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 0.55rem 0.8rem;
+      outline: none;
+      transition: border-color 0.15s;
+      width: 100%;
+    }
+
+    .field-input:focus { border-color: var(--blue); }
+
+    .btn-save {
+      width: 100%;
+      padding: 0.75rem;
+      border: none;
+      border-radius: 9px;
+      background: var(--blue);
+      color: #fff;
+      font-size: 0.93rem;
+      font-family: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.14s, transform 0.1s;
+      margin-bottom: 0.8rem;
+    }
+
+    .btn-save:hover  { opacity: 0.88; }
+    .btn-save:active { transform: scale(0.97); }
+
+    .config-status {
+      font-size: 0.85rem;
+      min-height: 1.2em;
+      text-align: center;
+    }
+
+    .config-status.ok    { color: var(--green); }
+    .config-status.error { color: var(--highlight); }
   </style>
 </head>
 <body>
@@ -232,6 +292,26 @@
       <div class="status-msg"   id="statusMsg">No path loaded yet.</div>
     </div>
   </div>
+</div>
+
+<!-- ── Module & Routine ───────────────────────────────────────── -->
+<div class="card" id="configCard">
+  <p class="section-label">Module &amp; Routine</p>
+
+  <div class="field-group">
+    <div class="field">
+      <label class="field-label" for="moduleInput">RAPID Module</label>
+      <input class="field-input" type="text" id="moduleInput" placeholder="e.g. MainModule" autocomplete="off">
+    </div>
+    <div class="field">
+      <label class="field-label" for="routineInput">Routine</label>
+      <input class="field-input" type="text" id="routineInput" placeholder="e.g. main" autocomplete="off">
+    </div>
+  </div>
+
+  <button class="btn-save" onclick="saveConfig()">Save to config.ini</button>
+
+  <div class="config-status" id="configStatus"></div>
 </div>
 
 <!-- ── Navigation ─────────────────────────────────────────────── -->
@@ -352,12 +432,58 @@ async function pollStatus() {
   }
 }
 
-/* Load initial status on page open */
+/* ── Module & Routine ─────────────────────────────────────────── */
+const moduleInput  = document.getElementById('moduleInput');
+const routineInput = document.getElementById('routineInput');
+const configStatus = document.getElementById('configStatus');
+
+function showConfigStatus(type, msg) {
+  configStatus.textContent = msg;
+  configStatus.className   = `config-status ${type}`;
+  if (type === 'ok') setTimeout(() => { configStatus.textContent = ''; }, 3000);
+}
+
+async function saveConfig() {
+  const module  = moduleInput.value.trim();
+  const routine = routineInput.value.trim();
+  if (!module || !routine) {
+    showConfigStatus('error', 'Module and routine must not be empty.');
+    return;
+  }
+  try {
+    const resp = await fetch('/api/robot-config', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ module, routine }),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      showConfigStatus('ok', `✔ Saved  –  module: ${data.module}   routine: ${data.routine}`);
+    } else {
+      showConfigStatus('error', data.error || 'Save failed.');
+    }
+  } catch (err) {
+    showConfigStatus('error', `Request failed: ${err.message}`);
+  }
+}
+
+/* ── Page init ────────────────────────────────────────────────── */
 (async function init() {
+  /* Load path status */
   try {
     const resp = await fetch('/api/path-status');
     const data = await resp.json();
     setStatus(data.status, data.message);
+  } catch (_) {}
+
+  /* Load module & routine */
+  try {
+    const resp = await fetch('/api/robot-config');
+    if (resp.ok) {
+      const data = await resp.json();
+      moduleInput.value  = data.module  || '';
+      routineInput.value = data.routine || '';
+    }
   } catch (_) {}
 })();
 </script>
