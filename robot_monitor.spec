@@ -6,10 +6,19 @@
 #   pyinstaller robot_monitor.spec
 #
 # The resulting dist\robot_monitor\ folder contains the executable and all
-# required files. Copy the whole folder to the target machine.
+# required files.  Copy the whole folder to the target machine.
 #
-# config.ini is included as a writable template so the user can edit it.
-# The templates/ folder is bundled as data so Flask can serve the HTML pages.
+# Files and their roles at runtime:
+#   config.ini               – loaded on startup; module/routine can be edited
+#                              at runtime from the Home page and are written
+#                              back to this file automatically.
+#   projector_settings.json  – created/updated at runtime when the user saves
+#                              settings from the Settings page; NOT bundled here
+#                              (it is written next to the executable).
+#   templates/               – HTML pages served by Flask.
+#   static/three/            – Three.js module; downloaded on first run if
+#                              the machine has internet access.
+#   cert.pem / key.pem       – generated on first run; NOT bundled.
 #
 # To build a single-file .exe instead, change:
 #   exclude_binaries=True  ->  exclude_binaries=False
@@ -22,9 +31,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        # HTML templates required by Flask
+        # HTML templates required by Flask (includes home.html, index.html,
+        # settings.html, xr.html)
         ('templates', 'templates'),
-        # Default config shipped with the executable
+        # Default config shipped with the executable; written back at runtime
+        # when module/routine are changed from the Home page
         ('config.ini', '.'),
     ],
     hiddenimports=[
@@ -63,6 +74,8 @@ a = Analysis(
         'threading',
         'ipaddress',
         'logging',
+        'webbrowser',
+        'json',
     ],
     hookspath=[],
     hooksconfig={},

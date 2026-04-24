@@ -6,6 +6,11 @@ on a 2-D web-based projection canvas.  The web view is designed to be
 projected onto a physical work table so that programmed robot positions are
 visible directly on the surface.
 
+Path visualization (move sequence, zone circles) is loaded on demand from the
+Home page: the program acquires RAPID mastership, reads the module source, and
+draws the path.  If the robot is in manual mode the operator must accept the
+RMMP grant on the FlexPendant.
+
 Supported controllers:
 
 | Controller | RWS version | `rws_version` |
@@ -28,7 +33,7 @@ Install Python dependencies:
 pip install -r requirements.txt
 ```
 
-Dependencies: `requests`, `flask`
+Dependencies: `requests`, `flask`, `cryptography`
 
 ---
 
@@ -37,9 +42,11 @@ Dependencies: `requests`, `flask`
 | File | Description |
 |---|---|
 | `robot_monitor.py` | Main script: RWS client, monitor loop, Flask web server (HTTP + HTTPS) |
-| `config.ini` | Configuration (IP, port, module name, credentials, web port, HTTPS port) |
+| `config.ini` | Configuration (IP, port, module, routine, credentials, web ports) |
+| `projector_settings.json` | Display settings saved by the Settings page (created on first save) |
 | `requirements.txt` | Python package dependencies |
 | `generate_cert.py` | Standalone script to regenerate the self-signed SSL certificate |
+| `templates/home.html` | Home page: path control, module/routine settings, navigation (served at `/home`) |
 | `templates/index.html` | Fullscreen 2-D projection canvas (served at `/`) |
 | `templates/settings.html` | Image adjustment controls (served at `/settings`) |
 | `templates/xr.html` | 3-D WebXR visualiser for Meta Quest 3 (served at `/xr` over HTTPS) |
@@ -50,21 +57,22 @@ Dependencies: `requests`, `flask`
 
 ## Configuration
 
-All parameters are set in `config.ini`:
+All parameters are set in `config.ini`.  The `module` and `routine` keys can
+also be changed at runtime from the Home page without restarting the program.
 
 ```ini
 [robot]
-ip           = 192.168.125.1   # IP address of the robot controller
-port         = 80              # RWS HTTP port (default 80)
-rws_version  = 1               # 1 for RWS 1.0, 2 for RWS 2.0
-task         = T_ROB1          # RAPID task name
-module       = MainModule      # RAPID module to monitor
-routine      = main            # RAPID routine to parse for path visualization
-poll_interval = 2.0            # Polling interval in seconds
-username     = Default User    # RWS login username
-password     = robotics        # RWS login password
-web_port     = 5000            # Port for the local web visualiser
-https_port   = 5443            # Port for the HTTPS / WebXR server
+ip            = 192.168.125.1   # IP address of the robot controller
+port          = 80              # RWS HTTP port (default 80)
+rws_version   = 1               # 1 for RWS 1.0, 2 for RWS 2.0
+task          = T_ROB1          # RAPID task name
+module        = MainModule      # RAPID module to monitor
+routine       = main            # RAPID routine to parse for path visualization
+poll_interval = 2.0             # Polling interval in seconds
+username      = Default User    # RWS login username
+password      = robotics        # RWS login password
+web_port      = 5000            # Port for the local web visualiser
+https_port    = 5443            # Port for the HTTPS / WebXR server
 ```
 
 | Key | Default | Description |
@@ -74,7 +82,7 @@ https_port   = 5443            # Port for the HTTPS / WebXR server
 | `rws_version` | `1` | Robot Web Services version: `1` for RWS 1.0, `2` for RWS 2.0 |
 | `task` | `T_ROB1` | RAPID task name |
 | `module` | `MainModule` | RAPID module to monitor |
-| `routine` | `main` | RAPID routine to parse for MoveL/MoveJ path visualization |
+| `routine` | `main` | RAPID routine to parse for MoveL/MoveJ/MoveC path visualization |
 | `poll_interval` | `2.0` | Polling interval in seconds |
 | `username` | `Default User` | RWS login username |
 | `password` | `robotics` | RWS login password |
@@ -95,11 +103,13 @@ On startup the script:
 2. Verifies that the controller is reachable.
 3. Starts the robot monitor in a background thread.
 4. Starts the Flask web server.
+5. Opens the Home page (`http://localhost:5000/home`) in the default browser.
 
 The terminal prints the current lists of robtargets and wobjdata every time
-the lists change.  The web visualiser is available at:
+the lists change.  The web pages are available at:
 
 ```
+http://localhost:5000/home       (Home – path control, module/routine)
 http://localhost:5000/           (2-D projection canvas)
 http://localhost:5000/settings   (image adjustment controls)
 https://localhost:5443/xr        (3-D XR visualiser – Meta Quest 3)
@@ -142,31 +152,6 @@ endpoints differ depending on the selected RWS version:
 RWS 2.0 requests include `Accept: application/xhtml+xml;v=2.0` and
 `Content-Type: application/x-www-form-urlencoded;v=2.0` headers.
 
-### Path visualization
-
-In addition to symbol data, the monitor downloads the RAPID module source
-file via the RWS File Service (`GET /fileservice/$HOME/<module>.mod`) on
-every poll cycle.  It parses the configured `routine` (default `main`) for
-`MoveL` and `MoveJ` instructions and extracts:
-
-- **Target name** — only declared (named) robtargets; inline values are
-  skipped.
-- **Move type** — `L` (linear) or `J` (joint).
-- **Zone value** — the path zone radius in mm (e.g. `z50` → 50 mm,
-  `fine` → 0 mm).
-
-Only robtargets that appear in a MoveL/MoveJ instruction inside the
-specified routine are shown on the 2-D canvas.  The path between targets
-is drawn as:
-
-- **Solid black line** for MoveL (linear motion).
-- **Dashed black line** for MoveJ (joint motion).
-- **Grey circle** around each target showing the zone radius.
-- **Smooth corner arc** within the zone circle at each intermediate
-  target, representing the blended corner path.
-
----
-
 The lists are reprinted to the terminal and broadcast to all connected web
 clients whenever:
 
@@ -176,6 +161,74 @@ clients whenever:
 
 Wobjdata variables are re-read on every update but are not individually
 tracked for changes.
+
+---
+
+## Home page (`/home`)
+
+The Home page is opened automatically in the default browser when the program
+starts.  It provides three sections:
+
+### Path & Zone Values
+
+| Button | Effect |
+|---|---|
+| **Show / Update Path and Z-values** | Acquires RAPID mastership, reads the module source, parses the configured routine, and draws the path and zone circles on the projection canvas. In manual mode a status message instructs the operator to accept the RMMP grant on the FlexPendant. Mastership is released automatically after loading. |
+| **Hide Path and Z-values** | Removes path lines and zone circles from the canvas. Robtargets continue to be shown. |
+
+A colour-coded status card shows the current state:
+
+| Colour | State | Meaning |
+|---|---|---|
+| Grey | Idle | No path loaded yet, or path was hidden |
+| Blue | Requesting / Loading | Mastership is being acquired or module is being read |
+| Green | Done | Path loaded successfully |
+| Red | Error | Mastership failed or module could not be read |
+
+### Module & Routine
+
+Displays the currently active RAPID module name and routine name read from
+`config.ini`.  Both fields are editable.  Pressing **Save to config.ini**
+updates the running monitor immediately (the next poll uses the new module)
+and writes the new values back to `config.ini`.
+
+### Navigation
+
+Quick links to the Projected Image (`/`) and the Settings page (`/settings`).
+
+---
+
+## Path visualization
+
+Path visualization is **on demand**, triggered from the Home page.  It is
+not part of the continuous polling loop.
+
+When "Show / Update Path and Z-values" is pressed:
+
+1. The program requests RAPID mastership from the controller.
+2. **RWS 1.0 only:** if the robot is in manual mode, an RMMP (Request Manual
+   Mode Privilege) grant is requested and the operator must accept it on the
+   FlexPendant.  The program waits up to 30 seconds.
+3. The module source is downloaded (via File Service for RWS 1.0, or via the
+   `/rw/rapid/tasks/{task}/modules/{module}/text` endpoint for RWS 2.0).
+4. RAPID mastership is released and the RMMP grant is cancelled.
+5. The routine is parsed for `MoveL`, `MoveJ`, and `MoveC` instructions.
+6. The path is broadcast to all connected canvas clients via SSE.
+
+Only named robtargets (simple identifiers) are included; inline position
+values are skipped.
+
+The path is drawn as:
+
+- **Solid black line** for MoveL (linear motion).
+- **Dashed black line** for MoveJ (joint motion).
+- **Circular arc** for MoveC (circular motion), passing through the CirPoint.
+- **Grey ellipse** around each target showing the zone radius.
+- **Smooth corner arc** within the zone ellipse at each intermediate target,
+  representing the blended corner path.
+
+The loaded path persists across robtarget polling updates.  Use "Hide Path
+and Z-values" to clear it from the display.
 
 ---
 
@@ -194,47 +247,67 @@ fullscreen mode (F11) and projected onto a table.
   - A green arrow showing the tool Y-axis direction.
   - A filled dot at the position.
   - The variable name as a text label.
-- The Z coordinate of each robtarget is not used for positioning; it is only
-  used by the Z-filter.
-- Only targets whose canvas position falls within the visible area are drawn.
-  Targets outside the canvas are silently skipped.
+- All robtargets are always shown regardless of whether a path is loaded.
+- The Z coordinate is only used by the Z-filter; it is not used for 2-D
+  positioning.
 
 ### Panning
 
 Click and drag anywhere on the canvas to reposition the view.  The wobj
-origin moves with the drag.  Releasing the mouse (or touch) locks the new
-position.  The position is never reset automatically by new data arriving.
+origin moves with the drag.  The position is never reset automatically by
+new data arriving.
 
 On resize the origin position is scaled proportionally so that it stays at
 the same relative location on screen.
+
+For precise repositioning, use the Position Adjustment arrows on the Settings
+page (see below).
 
 ### Initial scaling
 
 The first time a non-empty target list arrives, the view is scaled and centred
 to fit all targets and the origin within the canvas with padding.  After that
 the scale does not change automatically; it can only be changed with the Zoom
-slider in Settings.
+sliders in Settings.
 
 ---
 
 ## Settings page (`/settings`)
 
-Open in a separate browser tab or window.  Changes take effect on the
-projection canvas instantly without any page reload.  Settings are stored in
-the browser's `localStorage` and survive page refreshes.
+Open in a separate browser tab or window alongside the projection canvas.
+Changes take effect on the canvas instantly without any page reload.
+
+Settings are stored in **`projector_settings.json`** on disk (next to the
+executable / script).  This means they survive browser cache clears and can
+be backed up or copied to another machine by copying that file.  The
+projection canvas reads settings from the server file on every page load so
+the correct values are always applied even in a fresh browser session.
 
 ### Image Transform
 
 | Setting | Range | Description |
 |---|---|---|
-| Rotation | 0 - 360 deg | Rotates the coordinate system (wobj origin, robtargets, calibration marks) around the wobj origin. The canvas aspect ratio and keystone correction are not affected. |
-| Vertical Keystone | -45 - +45 deg | Corrects vertical trapezoidal distortion caused by the projector being angled toward or away from the table |
-| Horizontal Keystone | -45 - +45 deg | Corrects horizontal trapezoidal distortion caused by the projector being angled sideways |
-| Zoom X | 10 - 500 % | Scales the image horizontally around the wobj origin |
-| Zoom Y | 10 - 500 % | Scales the image vertically around the wobj origin |
+| Rotation | 0 – 360 ° | Rotates the coordinate system (origin, targets, calibration marks) around the wobj origin. The canvas aspect ratio and keystone correction are not affected. |
+| Vertical Keystone | −45 – +45 ° | Corrects vertical trapezoidal distortion caused by the projector being angled toward or away from the table |
+| Horizontal Keystone | −45 – +45 ° | Corrects horizontal trapezoidal distortion caused by the projector being angled sideways |
+| Zoom X | 10 – 500 % | Scales the image horizontally around the wobj origin |
+| Zoom Y | 10 – 500 % | Scales the image vertically around the wobj origin |
 
-All transform controls have both a slider and a number input field that are
-kept in sync.  The number field accepts values typed directly.
+### Position Adjustment
+
+Shifts the entire coordinate system (origin and all targets) by a precise
+offset in robot mm.  This is independent of the drag pan on the canvas;
+both adjustments are additive.
+
+| Control | Description |
+|---|---|
+| **Step size** | Amount in mm by which each arrow press moves the image (default 1 mm) |
+| **↑ ↓ ← →** arrows | Move the image up/down/left/right by one step. ↑ increases Y offset; → increases X offset. |
+| **X Offset** slider / field | Current horizontal offset in mm (range ±2000 mm on slider; wider range in number field) |
+| **Y Offset** slider / field | Current vertical offset in mm |
+
+Position offsets are saved to `projector_settings.json` along with all other
+settings and are restored automatically on the next program start.
 
 ### Calibration Marks
 
@@ -294,7 +367,7 @@ WebXR and Three.js, designed for use in the Meta Quest 3 browser.
 
 ### Requirements
 
-- Python package `cryptography` (added to `requirements.txt`).
+- Python package `cryptography` (included in `requirements.txt`).
 - The server PC must have internet access on the **first run** so that
   Three.js can be downloaded and cached in `static/three/`.  Subsequent
   runs work without internet.
@@ -415,9 +488,27 @@ Plane and marks can be used independently or together.
 
 ### Image settings
 
-The rotation, keystone, zoom, calibration marks, and Z-filter controls on
-the `/settings` page apply **only** to the 2-D projection canvas (`/`).
-They have no effect on the XR view.
+The rotation, keystone, zoom, position offset, calibration marks, and Z-filter
+controls on the `/settings` page apply **only** to the 2-D projection canvas
+(`/`).  They have no effect on the XR view.
+
+---
+
+## API reference
+
+The following HTTP endpoints are served alongside the web pages:
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/server-info` | Returns local IP and port numbers as JSON |
+| `GET` | `/events` | SSE stream of robtarget, wobjdata, path, and path_visible updates |
+| `GET` | `/api/path-status` | Current status of the path-loading operation (`idle`, `requesting`, `loading`, `done`, `error`) |
+| `POST` | `/api/load-path` | Trigger on-demand path loading (acquire mastership, read module, parse, release) |
+| `POST` | `/api/hide-path` | Hide path and zone circles from the canvas |
+| `GET` | `/api/projector-settings` | Read display settings from `projector_settings.json` |
+| `POST` | `/api/projector-settings` | Write display settings to `projector_settings.json` |
+| `GET` | `/api/robot-config` | Return active module and routine |
+| `POST` | `/api/robot-config` | Update module and routine at runtime and persist to `config.ini` |
 
 ---
 
@@ -430,7 +521,10 @@ They have no effect on the XR view.
 - Only the first wobjdata variable found is shown on the canvas.  Its name
   is displayed next to the origin.
 - The Z coordinate is not used for 2-D positioning; depth information is
-  intentionally ignored.
-- The web server uses Flask's built-in development server, which is suitable
-  for single-user local network use.  It is not intended for production or
+  intentionally ignored in the projection canvas.
+- The web server uses Werkzeug's threaded server, which is suitable for
+  single-user local network use.  It is not intended for production or
   multi-user deployments.
+- Path visualization reads the module source at the moment the button is
+  pressed.  If the RAPID program is modified on the controller, press
+  "Show / Update Path and Z-values" again to refresh.
