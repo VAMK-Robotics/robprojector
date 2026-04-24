@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>RobProjector – Home</title>
+  <style>
+    :root {
+      --bg:        #12121e;
+      --panel:     #1c1c30;
+      --border:    #2e2e50;
+      --accent:    #3a3a6e;
+      --highlight: #e05070;
+      --green:     #40c070;
+      --blue:      #4488ee;
+      --text:      #e8e8f0;
+      --muted:     #7070a0;
+      --track:     #2a2a45;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 2.5rem 1.5rem 4rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2.4rem;
+    }
+
+    header h1 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #fff;
+    }
+
+    header p {
+      margin-top: 0.4rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 2rem 2.5rem 2.5rem;
+      width: 100%;
+      max-width: 540px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+      margin-bottom: 1.4rem;
+    }
+
+    .section-label {
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 1.4rem;
+    }
+
+    /* ── Action buttons ────────────────────────────────────────── */
+    .btn-row {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+    }
+
+    button {
+      width: 100%;
+      padding: 0.85rem 1rem;
+      border: none;
+      border-radius: 10px;
+      font-size: 0.97rem;
+      font-family: inherit;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      cursor: pointer;
+      transition: opacity 0.14s, transform 0.1s, background 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.6rem;
+    }
+
+    button:hover:not(:disabled)  { opacity: 0.88; }
+    button:active:not(:disabled) { transform: scale(0.97); }
+    button:disabled               { opacity: 0.38; cursor: not-allowed; }
+
+    .btn-show { background: var(--blue);      color: #fff; }
+    .btn-hide { background: var(--accent);    color: #ccd; }
+
+    /* Spinner */
+    .spinner {
+      display: none;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.35);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Status card ───────────────────────────────────────────── */
+    .status-card {
+      border-radius: 10px;
+      padding: 1rem 1.3rem;
+      margin-top: 1.6rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      border: 1px solid var(--border);
+      background: var(--track);
+      transition: background 0.3s, border-color 0.3s;
+    }
+
+    .status-card.status-idle       { background: var(--track);  border-color: var(--border); }
+    .status-card.status-requesting,
+    .status-card.status-loading    { background: rgba(68,136,238,0.12); border-color: rgba(68,136,238,0.4); }
+    .status-card.status-done       { background: rgba(64,192,112,0.12); border-color: rgba(64,192,112,0.4); }
+    .status-card.status-error      { background: rgba(224,80,112,0.12); border-color: rgba(224,80,112,0.4); }
+    .status-card.status-busy       { background: rgba(68,136,238,0.12); border-color: rgba(68,136,238,0.4); }
+
+    .status-icon {
+      font-size: 1.2rem;
+      flex-shrink: 0;
+      margin-top: 0.05rem;
+    }
+
+    .status-content { flex: 1; min-width: 0; }
+
+    .status-title {
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.3rem;
+    }
+
+    .status-msg {
+      font-size: 0.92rem;
+      color: var(--text);
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    .status-card.status-requesting .status-title,
+    .status-card.status-loading    .status-title,
+    .status-card.status-busy       .status-title { color: var(--blue); }
+    .status-card.status-done       .status-title { color: var(--green); }
+    .status-card.status-error      .status-title { color: var(--highlight); }
+
+    /* ── Nav links ─────────────────────────────────────────────── */
+    .nav-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.5rem 2.5rem;
+      width: 100%;
+      max-width: 540px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    }
+
+    .nav-links {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .nav-link {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      padding: 0.75rem 1rem;
+      border-radius: 9px;
+      background: var(--track);
+      border: 1px solid var(--border);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 0.93rem;
+      font-weight: 500;
+      transition: background 0.15s, border-color 0.15s, transform 0.1s;
+    }
+
+    .nav-link:hover  { background: var(--accent); border-color: var(--blue); transform: translateX(3px); }
+    .nav-link:active { transform: translateX(1px); }
+
+    .nav-link-icon { font-size: 1.15rem; flex-shrink: 0; }
+    .nav-link-label { flex: 1; }
+    .nav-link-url   { font-size: 0.78rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>RobProjector</h1>
+  <p>ABB Robot Path &amp; Target Visualiser</p>
+</header>
+
+<!-- ── Path Control ───────────────────────────────────────────── -->
+<div class="card">
+  <p class="section-label">Path &amp; Zone Values</p>
+
+  <div class="btn-row">
+    <button class="btn-show" id="showBtn" onclick="loadPath()">
+      <span class="spinner" id="showSpinner"></span>
+      <span id="showBtnText">Show / Update Path and Z-values</span>
+    </button>
+    <button class="btn-hide" onclick="hidePath()">
+      Hide Path and Z-values
+    </button>
+  </div>
+
+  <div class="status-card status-idle" id="statusCard">
+    <span class="status-icon" id="statusIcon">⬤</span>
+    <div class="status-content">
+      <div class="status-title" id="statusTitle">Status</div>
+      <div class="status-msg"   id="statusMsg">No path loaded yet.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Navigation ─────────────────────────────────────────────── -->
+<div class="nav-card">
+  <p class="section-label" style="margin-bottom:1rem;">Pages</p>
+  <div class="nav-links">
+    <a class="nav-link" href="/">
+      <span class="nav-link-icon">📐</span>
+      <span class="nav-link-label">Projected Image (2D)</span>
+      <span class="nav-link-url">localhost/</span>
+    </a>
+    <a class="nav-link" href="/settings">
+      <span class="nav-link-icon">⚙️</span>
+      <span class="nav-link-label">Settings</span>
+      <span class="nav-link-url">localhost/settings</span>
+    </a>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+let pollTimer  = null;
+let isLoading  = false;
+
+const showBtn     = document.getElementById('showBtn');
+const showSpinner = document.getElementById('showSpinner');
+const showBtnText = document.getElementById('showBtnText');
+const statusCard  = document.getElementById('statusCard');
+const statusIcon  = document.getElementById('statusIcon');
+const statusTitle = document.getElementById('statusTitle');
+const statusMsg   = document.getElementById('statusMsg');
+
+const STATUS_META = {
+  idle:       { title: 'Status',     icon: '⬤',  cls: 'status-idle' },
+  requesting: { title: 'Requesting', icon: '⬤',  cls: 'status-requesting' },
+  loading:    { title: 'Loading',    icon: '⬤',  cls: 'status-loading' },
+  done:       { title: 'Done',       icon: '✔',  cls: 'status-done' },
+  error:      { title: 'Error',      icon: '✖',  cls: 'status-error' },
+  busy:       { title: 'Busy',       icon: '⬤',  cls: 'status-busy' },
+};
+
+function setStatus(status, message) {
+  const meta = STATUS_META[status] || STATUS_META.idle;
+  statusCard.className  = `status-card ${meta.cls}`;
+  statusIcon.textContent  = meta.icon;
+  statusTitle.textContent = meta.title;
+  statusMsg.textContent   = message;
+}
+
+function setLoading(loading) {
+  isLoading = loading;
+  showBtn.disabled          = loading;
+  showSpinner.style.display = loading ? 'block' : 'none';
+  showBtnText.textContent   = loading
+    ? 'Loading…'
+    : 'Show / Update Path and Z-values';
+}
+
+async function loadPath() {
+  if (isLoading) return;
+  setLoading(true);
+  setStatus('requesting', 'Starting path load…');
+
+  try {
+    const resp = await fetch('/api/load-path', { method: 'POST' });
+    const data = await resp.json();
+    if (resp.status === 409) {
+      setStatus('busy', data.message);
+      setLoading(false);
+      startPolling();
+      return;
+    }
+  } catch (err) {
+    setStatus('error', `Request failed: ${err.message}`);
+    setLoading(false);
+    return;
+  }
+
+  startPolling();
+}
+
+async function hidePath() {
+  stopPolling();
+  try {
+    const resp = await fetch('/api/hide-path', { method: 'POST' });
+    const data = await resp.json();
+    setStatus('idle', data.message || 'Path hidden from display.');
+  } catch (err) {
+    setStatus('error', `Request failed: ${err.message}`);
+  }
+}
+
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(pollStatus, 1000);
+}
+
+function stopPolling() {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+async function pollStatus() {
+  try {
+    const resp = await fetch('/api/path-status');
+    const data = await resp.json();
+    setStatus(data.status, data.message);
+
+    if (data.status === 'done' || data.status === 'error') {
+      stopPolling();
+      setLoading(false);
+    }
+  } catch (_) {
+    /* silently ignore transient poll failures */
+  }
+}
+
+/* Load initial status on page open */
+(async function init() {
+  try {
+    const resp = await fetch('/api/path-status');
+    const data = await resp.json();
+    setStatus(data.status, data.message);
+  } catch (_) {}
+})();
+</script>
+
+</body>
+</html>

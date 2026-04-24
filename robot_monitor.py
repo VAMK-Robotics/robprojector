@@ -27,6 +27,7 @@ import socket
 import ipaddress
 import datetime
 import logging
+import webbrowser
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Optional
@@ -62,11 +63,31 @@ app.logger.disabled = True          # suppress Flask request logs in terminal
 # SSE broadcast infrastructure (thread-safe)
 # ---------------------------------------------------------------------------
 
-_shared: dict = {"robtargets": [], "wobjdata": [], "path": []}
+_shared: dict = {"robtargets": [], "wobjdata": [], "path": [], "path_visible": False}
 _shared_lock  = threading.Lock()
 
 _subscribers: list[queue.Queue] = []
 _subs_lock    = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Global robot client (set in main, used by on-demand path-loading routes)
+# ---------------------------------------------------------------------------
+
+_client: Optional["RWSClient"] = None
+
+# ---------------------------------------------------------------------------
+# Path-load status (updated by background worker, read by /api/path-status)
+# ---------------------------------------------------------------------------
+
+_path_load_status: dict = {"status": "idle", "message": "No path loaded yet."}
+_path_status_lock  = threading.Lock()
+
+
+def _set_path_status(status: str, message: str) -> None:
+    with _path_status_lock:
+        _path_load_status["status"]  = status
+        _path_load_status["message"] = message
+    print(f"[PATH] {status}: {message}")
 
 
 def _broadcast(data: dict) -> None:
@@ -107,6 +128,11 @@ def xr_page():
     )
 
 
+@app.route("/home")
+def home_page():
+    return render_template("home.html")
+
+
 @app.route("/api/server-info")
 def api_server_info():
     return jsonify({
@@ -114,6 +140,35 @@ def api_server_info():
         "https_port": _cfg_cache.get("https_port", 5443),
         "web_port":   _cfg_cache.get("web_port",   5000),
     })
+
+
+@app.route("/api/path-status")
+def api_path_status():
+    """Return the current status of the on-demand path-loading operation."""
+    with _path_status_lock:
+        return jsonify(dict(_path_load_status))
+
+
+@app.route("/api/load-path", methods=["POST"])
+def api_load_path():
+    """Trigger on-demand path loading: acquire mastership, read module, parse path."""
+    with _path_status_lock:
+        current = _path_load_status["status"]
+    if current in ("requesting", "loading"):
+        return jsonify({"status": "busy", "message": "Path loading already in progress."}), 409
+
+    t = threading.Thread(target=_load_path_worker, daemon=True)
+    t.start()
+    return jsonify({"status": "started", "message": "Path loading started."})
+
+
+@app.route("/api/hide-path", methods=["POST"])
+def api_hide_path():
+    """Hide path and zone circles from the projected image."""
+    with _shared_lock:
+        _shared["path_visible"] = False
+    _broadcast({"path_visible": False})
+    return jsonify({"status": "ok", "message": "Path hidden from display."})
 
 
 @app.route("/events")
@@ -148,6 +203,66 @@ def sse_stream():
             "X-Accel-Buffering": "no",
             "Connection":       "keep-alive",
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# On-demand path loading worker
+# ---------------------------------------------------------------------------
+
+def _load_path_worker() -> None:
+    """Background thread: acquire mastership, load module, parse path, broadcast."""
+    if _client is None:
+        _set_path_status("error", "Robot client not initialized.")
+        return
+
+    routine = _cfg_cache.get("routine", "main")
+
+    # Always start with a clean RMMP state so each load request goes through
+    # the full acquisition flow.  Without this, a stale _rmmp_held=True from
+    # a previous run causes _save_module() to skip re-requesting RMMP after
+    # the operator has revoked the previous grant on the FlexPendant.
+    _client._rmmp_held = False
+
+    _set_path_status(
+        "requesting",
+        "Requesting RAPID mastership… "
+        "If the robot is in manual mode, accept on the FlexPendant.",
+    )
+
+    source = ""
+    try:
+        source = _client.get_module_text()
+    except Exception as exc:
+        _set_path_status("error", f"Error loading module: {exc}")
+        return
+    finally:
+        # Cancel the RMMP grant so the FlexPendant shows mastership as
+        # released and the next load can request it again cleanly.
+        # _cancel_rmmp() is a no-op if no RMMP was held.
+        _client._cancel_rmmp()
+
+    if not source:
+        _set_path_status(
+            "error",
+            "Failed to load module – could not acquire mastership or read module text.",
+        )
+        return
+
+    _set_path_status("loading", "Parsing path from module…")
+    path = parse_routine_moves(source, routine)
+
+    with _shared_lock:
+        _shared["path"]         = path
+        _shared["path_visible"] = True
+
+    _broadcast({"path": path, "path_visible": True})
+
+    count = len(path)
+    _set_path_status(
+        "done",
+        f"Path loaded: {count} move{'s' if count != 1 else ''} "
+        f"in routine '{routine}'.",
     )
 
 
@@ -994,16 +1109,21 @@ def print_wobjdata(variables: list[RapidVariable]) -> None:
 # ---------------------------------------------------------------------------
 
 def monitor(client: RWSClient, poll_interval: float, routine: str) -> None:
+    """Poll robtargets and wobjdata; broadcast changes via SSE.
+
+    Path loading is done on-demand via POST /api/load-path and is not
+    affected by this loop.  The loop never modifies path or path_visible
+    in _shared so that a loaded path persists across robtarget updates.
+    """
     known: dict[str, str] = {}
-    known_path: list[dict] = []
     first_run = True
 
-    print(f"\nMonitoring module '{client.module}' on task '{client.task}', routine '{routine}'.")
+    print(f"\nMonitoring module '{client.module}' on task '{client.task}'.")
     print(f"Polling every {poll_interval:.1f} s.  Press Ctrl+C to stop.\n")
 
     while True:
-        robtargets   = client.fetch_variables("robtarget", symtyp="con")
-        current      = {v.name: v.value for v in robtargets}
+        robtargets    = client.fetch_variables("robtarget", symtyp="con")
+        current       = {v.name: v.value for v in robtargets}
         current_names = set(current)
         known_names   = set(known)
 
@@ -1013,15 +1133,7 @@ def monitor(client: RWSClient, poll_interval: float, routine: str) -> None:
             n for n in current_names & known_names if current[n] != known[n]
         }
 
-        # Path parsing is disabled for now (no module read / mastership).
-        # To re-enable, uncomment the block below.
-        # source = client.get_module_text()
-        # path   = parse_routine_moves(source, routine) if source else []
-        # path_changed = path != known_path
-        path: list[dict] = []
-        path_changed = False
-
-        if first_run or new_names or removed_names or changed_names or path_changed:
+        if first_run or new_names or removed_names or changed_names:
             if not first_run:
                 if new_names:
                     print(f"\n[INFO] Robtarget(s) added:   {', '.join(sorted(new_names))}")
@@ -1034,15 +1146,16 @@ def monitor(client: RWSClient, poll_interval: float, routine: str) -> None:
             print_robtargets(robtargets)
             print_wobjdata(wobjdata)
 
+            # Broadcast only robtargets and wobjdata.
+            # path / path_visible are managed by /api/load-path and /api/hide-path
+            # and must not be overwritten here.
             _broadcast({
                 "robtargets": [{"name": r.name, "value": r.value} for r in robtargets],
                 "wobjdata":   [{"name": w.name, "value": w.value} for w in wobjdata],
-                "path":       path,
             })
 
-            known      = current
-            known_path = path
-            first_run  = False
+            known     = current
+            first_run = False
 
         time.sleep(poll_interval)
 
@@ -1089,6 +1202,10 @@ def main() -> None:
         client.probe_endpoints(cfg["task"], cfg["module"])
         return
 
+    # Make the client available to Flask routes (on-demand path loading).
+    global _client
+    _client = client
+
     # Start the robot monitor in a background thread
     t = threading.Thread(
         target=monitor, args=(client, cfg["poll_interval"], cfg["routine"]), daemon=True
@@ -1109,9 +1226,14 @@ def main() -> None:
     http_thread = threading.Thread(target=http_srv.serve_forever, daemon=True)
     http_thread.start()
 
-    print(f"\n2-D projection →  http://localhost:{web_port}/")
+    home_url = f"http://localhost:{web_port}/home"
+    print(f"\nHome           →  {home_url}")
+    print(f"2-D projection →  http://localhost:{web_port}/")
     print(f"                  http://{local_ip}:{web_port}/")
     print(f"Settings       →  http://localhost:{web_port}/settings")
+
+    # Open the home page in the default browser automatically.
+    webbrowser.open(home_url)
 
     if https_ok:
         print(f"\nXR (WebXR/VR)  →  https://localhost:{https_port}/xr")

@@ -26,7 +26,7 @@
 'use strict';
 
 /* ─── Global state ────────────────────────────────────────────── */
-let robotData = { robtargets: [], wobjdata: [], path: [] };
+let robotData = { robtargets: [], wobjdata: [], path: [], path_visible: false };
 let settings  = { rotation: 0, vKeystone: 0, hKeystone: 0, zoomX: 100, zoomY: 100,
                   calMarks: false, calX: 500, calY: 500,
                   zFilterEnabled: false, zFilter: 20 };
@@ -303,110 +303,112 @@ function draw() {
     if (p) targetMap[rt.name] = { parsed: p, raw: rt };
   }
 
-  const path = robotData.path || [];
-  const pathNames = new Set(path.map(s => s.target));
-  for (const s of path) { if (s.via) pathNames.add(s.via); }
-
-  /* Resolve path steps to canvas positions */
+  /* ── Resolve path steps (only when path is visible) ─────────── */
   const steps = [];
-  for (const s of path) {
-    const entry = targetMap[s.target];
-    if (!entry) continue;
-    const p = entry.parsed;
-    if (settings.zFilterEnabled && Math.abs(p.z) > settings.zFilter) continue;
-    const step = {
-      pos:  toCanvas(p.x, p.y, view),
-      zone: s.zone,
-      moveType: s.move_type,
-      name: s.target,
-      parsed: p,
-    };
-    if (s.via && targetMap[s.via]) {
-      const vp = targetMap[s.via].parsed;
-      step.via = { pos: toCanvas(vp.x, vp.y, view), name: s.via, parsed: vp };
+  if (robotData.path_visible && robotData.path && robotData.path.length > 0) {
+    for (const s of robotData.path) {
+      const entry = targetMap[s.target];
+      if (!entry) continue;
+      const p = entry.parsed;
+      if (settings.zFilterEnabled && Math.abs(p.z) > settings.zFilter) continue;
+      const step = {
+        pos:      toCanvas(p.x, p.y, view),
+        zone:     s.zone,
+        moveType: s.move_type,
+        name:     s.target,
+        parsed:   p,
+      };
+      if (s.via && targetMap[s.via]) {
+        const vp = targetMap[s.via].parsed;
+        step.via = { pos: toCanvas(vp.x, vp.y, view), name: s.via, parsed: vp };
+      }
+      steps.push(step);
     }
-    steps.push(step);
   }
 
-  /* ── Zone circles (background layer) ────────────────────────── */
-  for (const st of steps) {
-    if (st.zone <= 0) continue;
-    const zrX = st.zone * scaleX;
-    const zrY = st.zone * scaleY;
-    ctx.save();
-    ctx.strokeStyle = 'rgba(160,160,160,0.45)';
-    ctx.fillStyle   = 'rgba(200,200,200,0.12)';
-    ctx.lineWidth   = 1;
-    ctx.beginPath();
-    ctx.ellipse(st.pos.x, st.pos.y, zrX, zrY, 0, 0, 2 * Math.PI);
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  /* ── Path lines + corner arcs ───────────────────────────────── */
-  for (let i = 0; i < steps.length - 1; i++) {
-    const A = steps[i], B = steps[i + 1];
-
-    ctx.save();
-    ctx.strokeStyle = '#111';
-    ctx.lineWidth   = 1.5;
-    ctx.lineCap     = 'round';
-    if (B.moveType === 'J') ctx.setLineDash([8, 6]);
-
-    if (B.moveType === 'C' && B.via) {
-      /* Circular arc from A through CirPoint to B (solid) */
+  /* ── Zone circles (background layer, only when path visible) ─── */
+  if (robotData.path_visible) {
+    for (const st of steps) {
+      if (st.zone <= 0) continue;
+      const zrX = st.zone * scaleX;
+      const zrY = st.zone * scaleY;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(160,160,160,0.45)';
+      ctx.fillStyle   = 'rgba(200,200,200,0.12)';
+      ctx.lineWidth   = 1;
       ctx.beginPath();
-      ctx.moveTo(A.pos.x, A.pos.y);
-      arcThrough(A.pos.x, A.pos.y, B.via.pos.x, B.via.pos.y, B.pos.x, B.pos.y);
+      ctx.ellipse(st.pos.x, st.pos.y, zrX, zrY, 0, 0, 2 * Math.PI);
+      ctx.fill();
       ctx.stroke();
-    } else {
-      /* Straight segment with zone clipping */
-      const dx = B.pos.x - A.pos.x, dy = B.pos.y - A.pos.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist >= 1) {
-        const ux = dx / dist, uy = dy / dist;
-        const zrA = A.zone * scaleAvg;
-        const zrB = B.zone * scaleAvg;
-        const remaining = dist - zrA - zrB;
-        if (remaining > 0) {
-          ctx.beginPath();
-          ctx.moveTo(A.pos.x + ux * zrA, A.pos.y + uy * zrA);
-          ctx.lineTo(B.pos.x - ux * zrB, B.pos.y - uy * zrB);
-          ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  /* ── Path lines + corner arcs (only when path visible) ──────── */
+  if (robotData.path_visible) {
+    for (let i = 0; i < steps.length - 1; i++) {
+      const A = steps[i], B = steps[i + 1];
+
+      ctx.save();
+      ctx.strokeStyle = '#111';
+      ctx.lineWidth   = 1.5;
+      ctx.lineCap     = 'round';
+      if (B.moveType === 'J') ctx.setLineDash([8, 6]);
+
+      if (B.moveType === 'C' && B.via) {
+        /* Circular arc from A through CirPoint to B (solid) */
+        ctx.beginPath();
+        ctx.moveTo(A.pos.x, A.pos.y);
+        arcThrough(A.pos.x, A.pos.y, B.via.pos.x, B.via.pos.y, B.pos.x, B.pos.y);
+        ctx.stroke();
+      } else {
+        /* Straight segment with zone clipping */
+        const dx = B.pos.x - A.pos.x, dy = B.pos.y - A.pos.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist >= 1) {
+          const ux = dx / dist, uy = dy / dist;
+          const zrA = A.zone * scaleAvg;
+          const zrB = B.zone * scaleAvg;
+          const remaining = dist - zrA - zrB;
+          if (remaining > 0) {
+            ctx.beginPath();
+            ctx.moveTo(A.pos.x + ux * zrA, A.pos.y + uy * zrA);
+            ctx.lineTo(B.pos.x - ux * zrB, B.pos.y - uy * zrB);
+            ctx.stroke();
+          }
         }
       }
+      ctx.restore();
     }
-    ctx.restore();
-  }
 
-  /* Corner arcs inside zone circles (only between straight segments) */
-  for (let i = 1; i < steps.length - 1; i++) {
-    const prev = steps[i - 1], curr = steps[i], next = steps[i + 1];
-    if (curr.zone <= 0) continue;
-    if (curr.moveType === 'C' || next.moveType === 'C') continue;
-    const zr = curr.zone * scaleAvg;
+    /* Corner arcs inside zone circles (only between straight segments) */
+    for (let i = 1; i < steps.length - 1; i++) {
+      const prev = steps[i - 1], curr = steps[i], next = steps[i + 1];
+      if (curr.zone <= 0) continue;
+      if (curr.moveType === 'C' || next.moveType === 'C') continue;
+      const zr = curr.zone * scaleAvg;
 
-    const dx1 = prev.pos.x - curr.pos.x, dy1 = prev.pos.y - curr.pos.y;
-    const len1 = Math.hypot(dx1, dy1);
-    const dx2 = next.pos.x - curr.pos.x, dy2 = next.pos.y - curr.pos.y;
-    const len2 = Math.hypot(dx2, dy2);
-    if (len1 < 1 || len2 < 1) continue;
+      const dx1 = prev.pos.x - curr.pos.x, dy1 = prev.pos.y - curr.pos.y;
+      const len1 = Math.hypot(dx1, dy1);
+      const dx2 = next.pos.x - curr.pos.x, dy2 = next.pos.y - curr.pos.y;
+      const len2 = Math.hypot(dx2, dy2);
+      if (len1 < 1 || len2 < 1) continue;
 
-    const inX  = curr.pos.x + (dx1 / len1) * zr;
-    const inY  = curr.pos.y + (dy1 / len1) * zr;
-    const outX = curr.pos.x + (dx2 / len2) * zr;
-    const outY = curr.pos.y + (dy2 / len2) * zr;
+      const inX  = curr.pos.x + (dx1 / len1) * zr;
+      const inY  = curr.pos.y + (dy1 / len1) * zr;
+      const outX = curr.pos.x + (dx2 / len2) * zr;
+      const outY = curr.pos.y + (dy2 / len2) * zr;
 
-    ctx.save();
-    ctx.strokeStyle = '#111';
-    ctx.lineWidth   = 1.5;
-    ctx.lineCap     = 'round';
-    ctx.beginPath();
-    ctx.moveTo(inX, inY);
-    ctx.quadraticCurveTo(curr.pos.x, curr.pos.y, outX, outY);
-    ctx.stroke();
-    ctx.restore();
+      ctx.save();
+      ctx.strokeStyle = '#111';
+      ctx.lineWidth   = 1.5;
+      ctx.lineCap     = 'round';
+      ctx.beginPath();
+      ctx.moveTo(inX, inY);
+      ctx.quadraticCurveTo(curr.pos.x, curr.pos.y, outX, outY);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   /* ── Wobj origin ──────────────────────────────────────────────── */
@@ -426,33 +428,11 @@ function draw() {
     ctx.fillText(wobjName, org.x + 8, org.y + 20);
   }
 
-  /* ── Robtargets ─────────────────────────────────────────────── */
-  const allDrawPts = [];
-  const drawnNames = new Set();
-  if (steps.length > 0) {
-    /* Path mode: only targets referenced by Move instructions */
-    for (const st of steps) {
-      if (!drawnNames.has(st.name)) {
-        allDrawPts.push({ pos: st.pos, parsed: st.parsed, name: st.name });
-        drawnNames.add(st.name);
-      }
-      if (st.via && !drawnNames.has(st.via.name)) {
-        allDrawPts.push({ pos: st.via.pos, parsed: st.via.parsed, name: st.via.name });
-        drawnNames.add(st.via.name);
-      }
-    }
-  } else {
-    /* No path: draw all robtargets */
-    for (const [name, entry] of Object.entries(targetMap)) {
-      const p = entry.parsed;
-      if (settings.zFilterEnabled && Math.abs(p.z) > settings.zFilter) continue;
-      allDrawPts.push({ pos: toCanvas(p.x, p.y, view), parsed: p, name });
-    }
-  }
-
-  for (const pt of allDrawPts) {
-    const p   = pt.parsed;
-    const pos = pt.pos;
+  /* ── Robtargets: always draw all targets (z-filter still applies) */
+  for (const [name, entry] of Object.entries(targetMap)) {
+    const p = entry.parsed;
+    if (settings.zFilterEnabled && Math.abs(p.z) > settings.zFilter) continue;
+    const pos = toCanvas(p.x, p.y, view);
 
     const axes       = quatAxes2D(p.qw, p.qx, p.qy, p.qz);
     const [xaX, xaY] = axes.xAxis;
@@ -472,7 +452,7 @@ function draw() {
 
     ctx.font      = `${fontSize}px monospace`;
     ctx.fillStyle = '#111';
-    ctx.fillText(pt.name, pos.x + dotR + 4, pos.y - dotR - 3);
+    ctx.fillText(name, pos.x + dotR + 4, pos.y - dotR - 3);
   }
 
   /* ── Calibration marks ──────────────────────────────────────── */
@@ -486,7 +466,7 @@ function draw() {
   ctx.restore();   /* end of rotated context */
 
   /* ── Idle hint (outside rotation) ───────────────────────────── */
-  if (steps.length === 0 && robotData.robtargets.length === 0) {
+  if (robotData.robtargets.length === 0) {
     ctx.save();
     ctx.font      = '18px monospace';
     ctx.fillStyle = '#aaa';
@@ -540,14 +520,22 @@ window.addEventListener('touchend', () => { drag = null; });
 function connectSSE() {
   const src = new EventSource('/events');
   src.onmessage = e => {
-    robotData = JSON.parse(e.data);
-    if (!robotData.path) robotData.path = [];
+    /* Merge the partial update into robotData so that fields not
+       included in the update (e.g. path/path_visible when the monitor
+       broadcasts only robtargets/wobjdata) are preserved. */
+    const update = JSON.parse(e.data);
+    Object.assign(robotData, update);
+
     if (view === null) {
-      const pathNames = new Set(robotData.path.map(p => p.target));
-      const targets = pathNames.size > 0
-        ? robotData.robtargets.filter(r => pathNames.has(r.name))
-        : robotData.robtargets;
-      initView(targets);
+      /* Initialise view once we have targets.
+         When path is visible, fit the view to path-referenced targets. */
+      let viewTargets = robotData.robtargets;
+      if (robotData.path_visible && robotData.path && robotData.path.length > 0) {
+        const pathNames = new Set(robotData.path.map(p => p.target));
+        const filtered  = robotData.robtargets.filter(r => pathNames.has(r.name));
+        if (filtered.length > 0) viewTargets = filtered;
+      }
+      initView(viewTargets);
     }
     draw();
   };
