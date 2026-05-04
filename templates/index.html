@@ -15,9 +15,8 @@
       top: 0; left: 0;
       background: white;
       transform-origin: 50% 50%;
-      cursor: grab;
+      cursor: default;
     }
-    #canvas.dragging { cursor: grabbing; }
   </style>
 </head>
 <body>
@@ -85,8 +84,19 @@ function applyTransform() {
 
 function applyZoom() {
   if (view === null || baseScale === null) return;
-  view.scaleX = baseScale * (settings.zoomX / 100);
-  view.scaleY = baseScale * (settings.zoomY / 100);
+  const newScaleX = baseScale * (settings.zoomX / 100);
+  const newScaleY = baseScale * (settings.zoomY / 100);
+  /* Keep the coordinate-system origin fixed on screen while the scale changes.
+     The origin sits at canvas pixel (ox + offsetX*scaleX, oy - offsetY*scaleY).
+     Solve for the new ox/oy that place it at the same pixel with the new scale. */
+  const offX = settings.offsetX || 0;
+  const offY = settings.offsetY || 0;
+  const orgX = view.ox + offX * view.scaleX;
+  const orgY = view.oy - offY * view.scaleY;
+  view.ox     = orgX - offX * newScaleX;
+  view.oy     = orgY + offY * newScaleY;
+  view.scaleX = newScaleX;
+  view.scaleY = newScaleY;
   draw();
 }
 
@@ -493,46 +503,6 @@ function draw() {
     ctx.restore();
   }
 }
-
-/* ─── Mouse drag (pan the origin) ─────────────────────────────── */
-let drag = null;   /* { startX, startY, startOx, startOy } while dragging */
-
-canvas.addEventListener('mousedown', e => {
-  if (!view) return;
-  drag = { startX: e.clientX, startY: e.clientY, startOx: view.ox, startOy: view.oy };
-  canvas.classList.add('dragging');
-  e.preventDefault();
-});
-
-window.addEventListener('mousemove', e => {
-  if (!drag) return;
-  view.ox = drag.startOx + (e.clientX - drag.startX);
-  view.oy = drag.startOy + (e.clientY - drag.startY);
-  draw();
-});
-
-window.addEventListener('mouseup', () => {
-  drag = null;
-  canvas.classList.remove('dragging');
-});
-
-/* Touch support */
-canvas.addEventListener('touchstart', e => {
-  if (!view || e.touches.length !== 1) return;
-  const t = e.touches[0];
-  drag = { startX: t.clientX, startY: t.clientY, startOx: view.ox, startOy: view.oy };
-  e.preventDefault();
-}, { passive: false });
-
-window.addEventListener('touchmove', e => {
-  if (!drag || e.touches.length !== 1) return;
-  const t = e.touches[0];
-  view.ox = drag.startOx + (t.clientX - drag.startX);
-  view.oy = drag.startOy + (t.clientY - drag.startY);
-  draw();
-}, { passive: false });
-
-window.addEventListener('touchend', () => { drag = null; });
 
 /* ─── Server-Sent Events ──────────────────────────────────────── */
 function connectSSE() {
